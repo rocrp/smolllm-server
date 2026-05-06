@@ -1,0 +1,17 @@
+# smolllm-server configuration.
+# Default location: ~/.config/smolllm-server/config.yaml
+# Override via --config flag or SMOLLLM_SERVER_CONFIG env var.
+
+server:
+  bind: 127.0.0.1:11435
+  # Authorization: Bearer <access_key>. REQUIRED. Override with SMOLLLM_SERVER_ACCESS_KEY.
+  access_key: change-me
+  # Loaded at startup; existing env vars are NOT overwritten.
+  env_file: ~/.env.smolllm
+  log_level: info  # debug | info | warn | error
+
+# Aliases map a logical name to a comma-separated provider/model fallback chain.
+# smolllm-go tries each entry in order and falls back on errors.
+aliases:
+  fast: cerebras/qwen-3-235b-a22b-instruct-2507,groq/qwen/qwen3-32b!none,gemini/gemini-3.1-flash-lite-preview,codeagentlayer/droid/gemini-3-flash-preview,gemini/gemini-flash-latest,codeagentlayer/antigravity/gemini-3-flash,gemini/gemini-flash-latest
+  translator: ollama/frob/hy-mt1.5:latest,gemini/gemini-flash-lite-latest

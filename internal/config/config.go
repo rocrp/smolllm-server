@@ -1,0 +1,190 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/joho/godotenv"
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	DefaultBind       = "127.0.0.1:11435"
+	DefaultLogLevel   = "info"
+	EnvAccessKey      = "SMOLLLM_SERVER_ACCESS_KEY"
+	EnvConfigPath     = "SMOLLLM_SERVER_CONFIG"
+	DefaultConfigPath = "~/.config/smolllm-server/config.yaml"
+	DefaultEnvFile    = "~/.env.smolllm"
+)
+
+type Config struct {
+	Server  ServerConfig      `yaml:"server"`
+	Aliases map[string]string `yaml:"aliases"`
+}
+
+type ServerConfig struct {
+	Bind      string `yaml:"bind"`
+	AccessKey string `yaml:"access_key"`
+	EnvFile   string `yaml:"env_file"`
+	LogLevel  string `yaml:"log_level"`
+}
+
+// Load reads YAML from path, applies env overrides and defaults, and validates.
+// Use ResolvePath to figure out which path to pass.
+func Load(path string) (*Config, error) {
+	expanded, err := expandHome(path)
+	if err != nil {
+		return nil, fmt.Errorf("expand config path: %w", err)
+	}
+	data, err := os.ReadFile(expanded)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", expanded, err)
+	}
+	var cfg Config
+	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("parse yaml %s: %w", expanded, err)
+	}
+
+	cfg.applyDefaults()
+	cfg.applyEnvOverrides()
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+func (c *Config) applyDefaults() {
+	if c.Server.Bind == "" {
+		c.Server.Bind = DefaultBind
+	}
+	if c.Server.LogLevel == "" {
+		c.Server.LogLevel = DefaultLogLevel
+	}
+	if c.Server.EnvFile == "" {
+		c.Server.EnvFile = DefaultEnvFile
+	}
+	if c.Aliases == nil {
+		c.Aliases = map[string]string{}
+	}
+}
+
+func (c *Config) applyEnvOverrides() {
+	if v := os.Getenv(EnvAccessKey); v != "" {
+		c.Server.AccessKey = v
+	}
+}
+
+func (c *Config) Validate() error {
+	if _, _, err := net.SplitHostPort(c.Server.Bind); err != nil {
+		return fmt.Errorf("invalid server.bind %q: %w", c.Server.Bind, err)
+	}
+	if strings.TrimSpace(c.Server.AccessKey) == "" {
+		return errors.New("server.access_key must be set in config (or via " + EnvAccessKey + ")")
+	}
+	switch strings.ToLower(c.Server.LogLevel) {
+	case "debug", "info", "warn", "warning", "error":
+	default:
+		return fmt.Errorf("invalid server.log_level %q (want debug|info|warn|error)", c.Server.LogLevel)
+	}
+	for name, value := range c.Aliases {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("alias name must not be empty")
+		}
+		if strings.ContainsAny(name, " \t/,") {
+			return fmt.Errorf("alias name %q must not contain space, tab, slash, or comma", name)
+		}
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("alias %q has empty value", name)
+		}
+		for _, part := range strings.Split(value, ",") {
+			if strings.TrimSpace(part) == "" {
+				return fmt.Errorf("alias %q has empty entry in chain", name)
+			}
+		}
+	}
+	return nil
+}
+
+// EnvFilePath returns the expanded env-file path.
+func (c *Config) EnvFilePath() (string, error) {
+	if c.Server.EnvFile == "" {
+		return "", nil
+	}
+	return expandHome(c.Server.EnvFile)
+}
+
+// LoadEnvFile loads environment variables from the configured env file.
+// Existing env vars are NOT overwritten — launchd or shell exports win.
+// A missing file is not an error (returns nil).
+func (c *Config) LoadEnvFile() error {
+	path, err := c.EnvFilePath()
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("stat env file %s: %w", path, err)
+	}
+	if err := godotenv.Load(path); err != nil {
+		return fmt.Errorf("load env file %s: %w", path, err)
+	}
+	return nil
+}
+
+// ResolveModel returns the smolllm model string for an alias, or the input
+// itself if no alias matches.
+func (c *Config) ResolveModel(name string) string {
+	if v, ok := c.Aliases[name]; ok {
+		return v
+	}
+	return name
+}
+
+// ResolvePath picks the config file path: explicit > env > default.
+// Returns the expanded absolute path.
+func ResolvePath(explicit string) (string, error) {
+	candidate := explicit
+	if candidate == "" {
+		candidate = os.Getenv(EnvConfigPath)
+	}
+	if candidate == "" {
+		candidate = DefaultConfigPath
+	}
+	expanded, err := expandHome(candidate)
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(expanded)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+func expandHome(p string) (string, error) {
+	if p == "" {
+		return "", nil
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if p == "~" {
+			return home, nil
+		}
+		return filepath.Join(home, p[2:]), nil
+	}
+	return p, nil
+}
