@@ -25,7 +25,7 @@ Default config path: `~/.config/smolllm-server/config.yaml`. Override with
 
 ```yaml
 server:
-  bind: 127.0.0.1:11435
+  bind: 0.0.0.0:11435
   access_key: change-me       # REQUIRED. SMOLLLM_SERVER_ACCESS_KEY env wins if set
   env_file: ~/.env.smolllm    # provider keys: ${PROVIDER}_API_KEY etc.
   log_level: info
@@ -57,8 +57,8 @@ previous snapshot is retained.
 
 For `server.bind` changes, or to force a clean restart, run `make reload`.
 
-The agent runs at `127.0.0.1:11435` and reads `~/.env.smolllm` itself on
-startup — no wrapper script.
+The agent runs at `0.0.0.0:11435` (all interfaces, LAN-accessible) and reads
+`~/.env.smolllm` itself on startup — no wrapper script.
 
 ## Endpoints
 

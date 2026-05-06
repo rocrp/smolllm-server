@@ -14,7 +14,7 @@ func TestLoad_HappyPath(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
 server:
-  bind: 127.0.0.1:11435
+  bind: 0.0.0.0:11435
   access_key: rocry
   env_file: ~/.env.smolllm
   log_level: debug
@@ -26,7 +26,7 @@ aliases:
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1:11435", cfg.Server.Bind)
+	require.Equal(t, "0.0.0.0:11435", cfg.Server.Bind)
 	require.Equal(t, "rocry", cfg.Server.AccessKey)
 	require.Equal(t, "debug", cfg.Server.LogLevel)
 	require.Equal(t, "cerebras/qwen-3,groq/qwen3-32b", cfg.Aliases["fast"])

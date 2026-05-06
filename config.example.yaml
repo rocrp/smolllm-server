@@ -3,7 +3,7 @@
 # Override via --config flag or SMOLLLM_SERVER_CONFIG env var.
 
 server:
-  bind: 127.0.0.1:11435
+  bind: 0.0.0.0:11435
   # Authorization: Bearer <access_key>. REQUIRED. Override with SMOLLLM_SERVER_ACCESS_KEY.
   access_key: change-me
   # Loaded at startup; existing env vars are NOT overwritten.

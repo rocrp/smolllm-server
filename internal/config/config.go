@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	DefaultBind       = "127.0.0.1:11435"
+	DefaultBind       = "0.0.0.0:11435"
 	DefaultLogLevel   = "info"
 	EnvAccessKey      = "SMOLLLM_SERVER_ACCESS_KEY"
 	EnvConfigPath     = "SMOLLLM_SERVER_CONFIG"
