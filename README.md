@@ -42,10 +42,29 @@ each in order and falls back on error.
 
 ```bash
 make install      # build, seed config, link plist, bootstrap agent
-make reload       # rebuild + kickstart
+make reload       # rebuild + kickstart (full restart; needed for bind changes)
 make uninstall    # bootout + remove symlink (binary & config preserved)
 make logs         # tail /tmp/personal.smolllm-server.log
 ```
+
+### Hot reload (SIGHUP)
+
+Send `SIGHUP` to swap config in-place without dropping in-flight requests:
+
+```bash
+# Local (PID file under launchd):
+launchctl kill -SIGHUP gui/$(id -u)/personal.smolllm-server
+# Or, if running in foreground:
+kill -HUP $(pgrep -x smolllm-server)
+```
+
+Hot-reloadable: `aliases`, `server.access_key`, `server.log_level`,
+`server.env_file` contents (re-sourced with overwrite, so rotated provider
+keys take effect). Invalid YAML is rejected and the previous snapshot is
+retained — the server keeps serving.
+
+NOT hot-reloadable: `server.bind`. A bind change is logged as a warning and
+ignored; use `make reload` to actually re-bind.
 
 The agent runs at `127.0.0.1:11435` and reads `~/.env.smolllm` itself on
 startup — no wrapper script.

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -124,6 +125,17 @@ func (c *Config) EnvFilePath() (string, error) {
 // Existing env vars are NOT overwritten — launchd or shell exports win.
 // A missing file is not an error (returns nil).
 func (c *Config) LoadEnvFile() error {
+	return c.loadEnvFile(false)
+}
+
+// ReloadEnvFile re-sources the env file with overwrite enabled, so rotated
+// provider keys actually take effect on SIGHUP. Use only on reload, not
+// initial boot (initial boot must let launchd/shell exports win).
+func (c *Config) ReloadEnvFile() error {
+	return c.loadEnvFile(true)
+}
+
+func (c *Config) loadEnvFile(overload bool) error {
 	path, err := c.EnvFilePath()
 	if err != nil {
 		return err
@@ -136,7 +148,11 @@ func (c *Config) LoadEnvFile() error {
 	} else if err != nil {
 		return fmt.Errorf("stat env file %s: %w", path, err)
 	}
-	if err := godotenv.Load(path); err != nil {
+	loader := godotenv.Load
+	if overload {
+		loader = godotenv.Overload
+	}
+	if err := loader(path); err != nil {
 		return fmt.Errorf("load env file %s: %w", path, err)
 	}
 	return nil
@@ -170,6 +186,45 @@ func ResolvePath(explicit string) (string, error) {
 		return "", err
 	}
 	return abs, nil
+}
+
+// Store holds the live config behind an atomic pointer. Readers (handlers,
+// auth middleware) call Get() per request; SIGHUP calls Reload() to swap in
+// a freshly-parsed Config without dropping connections.
+//
+// Bind is captured at listen time and CANNOT be hot-changed; Reload logs
+// such drift back to the caller via the returned diff but keeps serving on
+// the original address. Everything else (aliases, access_key, log_level,
+// env_file path) is read fresh on every request.
+type Store struct {
+	path string
+	cur  atomic.Pointer[Config]
+}
+
+// NewStore wraps an already-loaded Config. The path is remembered so Reload
+// can re-read the same file.
+func NewStore(path string, initial *Config) *Store {
+	s := &Store{path: path}
+	s.cur.Store(initial)
+	return s
+}
+
+// Get returns the current config snapshot. Cheap; safe for hot paths.
+func (s *Store) Get() *Config { return s.cur.Load() }
+
+// Path returns the config file path used by Reload.
+func (s *Store) Path() string { return s.path }
+
+// Reload re-reads the config file, validates, and atomically swaps in the
+// new snapshot. Returns (new, old, error). On error the current snapshot is
+// retained and the caller can keep serving with stale config.
+func (s *Store) Reload() (newCfg, oldCfg *Config, err error) {
+	loaded, err := Load(s.path)
+	if err != nil {
+		return nil, s.cur.Load(), err
+	}
+	old := s.cur.Swap(loaded)
+	return loaded, old, nil
 }
 
 func expandHome(p string) (string, error) {

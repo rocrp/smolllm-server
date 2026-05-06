@@ -18,7 +18,7 @@ func (h *handlers) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prompt, opts, err := llm.BuildOptions(&req, h.cfg.ResolveModel)
+	prompt, opts, err := llm.BuildOptions(&req, h.cfg().ResolveModel)
 	if err != nil {
 		badRequest(w, err.Error())
 		return

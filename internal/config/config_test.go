@@ -97,6 +97,51 @@ func TestEnvAccessKeyOverride(t *testing.T) {
 	require.Equal(t, "envkey", cfg.Server.AccessKey)
 }
 
+func TestStore_ReloadSwapsAtomically(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  access_key: v1\naliases:\n  fast: a/b\n"), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	store := NewStore(path, cfg)
+	require.Equal(t, "v1", store.Get().Server.AccessKey)
+	require.Equal(t, "a/b", store.Get().ResolveModel("fast"))
+
+	// Mutate config on disk and reload.
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  access_key: v2\naliases:\n  fast: c/d\n  slow: e/f\n"), 0o600))
+
+	newCfg, oldCfg, err := store.Reload()
+	require.NoError(t, err)
+	require.Equal(t, "v1", oldCfg.Server.AccessKey)
+	require.Equal(t, "v2", newCfg.Server.AccessKey)
+	require.Equal(t, "v2", store.Get().Server.AccessKey)
+	require.Equal(t, "c/d", store.Get().ResolveModel("fast"))
+	require.Equal(t, "e/f", store.Get().ResolveModel("slow"))
+}
+
+func TestStore_ReloadInvalidKeepsCurrent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"server:\n  access_key: good\n"), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	store := NewStore(path, cfg)
+
+	// Write invalid config (missing access_key).
+	require.NoError(t, os.WriteFile(path, []byte("aliases:\n  x: a/b\n"), 0o600))
+
+	_, _, err = store.Reload()
+	require.Error(t, err)
+	require.Equal(t, "good", store.Get().Server.AccessKey, "stale config retained on error")
+}
+
 func TestExpandHome(t *testing.T) {
 	t.Parallel()
 	home, err := os.UserHomeDir()

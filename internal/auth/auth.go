@@ -8,10 +8,11 @@ import (
 	"github.com/rocry/smolllm-server/internal/apierr"
 )
 
-// Middleware verifies the Authorization header against the access key.
+// Middleware verifies the Authorization header against the access key
+// returned by keyFn. keyFn is invoked per request so the access key can be
+// hot-rotated via config reload without restarting the server.
 // Accepts either "Bearer <token>" or a bare "<token>".
-func Middleware(accessKey string) func(http.Handler) http.Handler {
-	expected := []byte(accessKey)
+func Middleware(keyFn func() string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := extractToken(r.Header.Get("Authorization"))
@@ -19,6 +20,7 @@ func Middleware(accessKey string) func(http.Handler) http.Handler {
 				apierr.Write(w, http.StatusUnauthorized, "missing_api_key", "invalid_request_error", "Missing API key in Authorization header")
 				return
 			}
+			expected := []byte(keyFn())
 			if subtle.ConstantTimeCompare([]byte(token), expected) != 1 {
 				apierr.Write(w, http.StatusUnauthorized, "invalid_api_key", "invalid_request_error", "Invalid API key")
 				return

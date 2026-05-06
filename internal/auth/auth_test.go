@@ -13,7 +13,7 @@ func TestMiddleware(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := Middleware("rocry")(ok)
+	mw := Middleware(func() string { return "rocry" })(ok)
 
 	tests := []struct {
 		name       string
@@ -39,6 +39,30 @@ func TestMiddleware(t *testing.T) {
 			require.Equal(t, tc.wantStatus, rec.Code)
 		})
 	}
+}
+
+func TestMiddleware_KeyFnHotRotation(t *testing.T) {
+	t.Parallel()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	current := "old"
+	mw := Middleware(func() string { return current })(ok)
+
+	doReq := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		mw.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	require.Equal(t, http.StatusOK, doReq("old"))
+	require.Equal(t, http.StatusUnauthorized, doReq("new"))
+
+	current = "new" // simulate SIGHUP reload
+	require.Equal(t, http.StatusUnauthorized, doReq("old"))
+	require.Equal(t, http.StatusOK, doReq("new"))
 }
 
 func TestExtractToken(t *testing.T) {

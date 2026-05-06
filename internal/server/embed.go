@@ -26,7 +26,7 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model := h.cfg.ResolveModel(req.Model)
+	model := h.cfg().ResolveModel(req.Model)
 	opts := []smolllm.Option{
 		smolllm.WithModel(model),
 		smolllm.WithLogger(h.logger),

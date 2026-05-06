@@ -11,12 +11,13 @@ import (
 
 func (h *handlers) models(w http.ResponseWriter, _ *http.Request) {
 	now := time.Now().Unix()
+	cfg := h.cfg()
 	out := llm.ModelsResponse{
 		Object: "list",
-		Data:   make([]llm.ModelInfo, 0, len(h.cfg.Aliases)),
+		Data:   make([]llm.ModelInfo, 0, len(cfg.Aliases)),
 	}
-	names := make([]string, 0, len(h.cfg.Aliases))
-	for name := range h.cfg.Aliases {
+	names := make([]string, 0, len(cfg.Aliases))
+	for name := range cfg.Aliases {
 		names = append(names, name)
 	}
 	sort.Strings(names)

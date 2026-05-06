@@ -11,22 +11,30 @@ import (
 )
 
 // Server bundles the HTTP server with its dependencies for graceful shutdown.
+// Bind is captured at listen time and is NOT hot-reloadable; everything else
+// is read fresh from Store on every request.
 type Server struct {
 	HTTP   *http.Server
-	Cfg    *config.Config
+	Store  *config.Store
 	Logger *slog.Logger
+	bind   string // captured at construction
 }
 
-// New builds the HTTP server, mux, and middleware chain.
-func New(cfg *config.Config, logger *slog.Logger) *Server {
+// New builds the HTTP server, mux, and middleware chain. The store is the
+// single source of truth for live config; pass the same store to the SIGHUP
+// reloader in main so handlers see updates without a restart.
+func New(store *config.Store, logger *slog.Logger) *Server {
+	cfg := store.Get()
+
 	mux := http.NewServeMux()
-	h := &handlers{cfg: cfg, logger: logger}
+	h := &handlers{store: store, logger: logger}
 
 	// Public routes (no auth)
 	mux.HandleFunc("GET /healthz", h.health)
 
-	// Protected routes
-	authMW := auth.Middleware(cfg.Server.AccessKey)
+	// Protected routes — auth middleware reads the access key from the store
+	// per request, so SIGHUP-driven access_key rotation takes effect immediately.
+	authMW := auth.Middleware(func() string { return store.Get().Server.AccessKey })
 	mux.Handle("POST /v1/chat/completions", authMW(http.HandlerFunc(h.chat)))
 	mux.Handle("POST /v1/embeddings", authMW(http.HandlerFunc(h.embeddings)))
 	mux.Handle("GET /v1/models", authMW(http.HandlerFunc(h.models)))
@@ -40,16 +48,22 @@ func New(cfg *config.Config, logger *slog.Logger) *Server {
 			ReadHeaderTimeout: 10 * time.Second,
 			// No write timeout: streaming responses can run for minutes.
 		},
-		Cfg:    cfg,
+		Store:  store,
 		Logger: logger,
+		bind:   cfg.Server.Bind,
 	}
 }
+
+// Bind returns the address the server is listening on. Use this to detect
+// post-reload bind drift (which requires a process restart).
+func (s *Server) Bind() string { return s.bind }
 
 // Run starts the HTTP server and blocks until ctx is canceled, then shuts down gracefully.
 func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
-		s.Logger.Info("server listening", "bind", s.Cfg.Server.Bind, "aliases", len(s.Cfg.Aliases))
+		cfg := s.Store.Get()
+		s.Logger.Info("server listening", "bind", s.bind, "aliases", len(cfg.Aliases))
 		if err := s.HTTP.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}

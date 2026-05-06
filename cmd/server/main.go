@@ -47,7 +47,11 @@ func run() error {
 		return err
 	}
 
-	logger := newLogger(cfg.Server.LogLevel)
+	levelVar := new(slog.LevelVar)
+	levelVar.Set(parseLevel(cfg.Server.LogLevel))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: levelVar}))
+
+	store := config.NewStore(cfgPath, cfg)
 	logger.Info("config loaded",
 		"path", cfgPath,
 		"bind", cfg.Server.Bind,
@@ -56,27 +60,81 @@ func run() error {
 		"env_file", cfg.Server.EnvFile,
 	)
 
-	srv := server.New(cfg, logger)
+	srv := server.New(store, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// SIGHUP → hot reload. Aliases, access_key, log_level, and env_file
+	// contents take effect immediately. Bind drift is logged and ignored
+	// (requires `make reload` to actually re-bind).
+	go reloadOnSignal(ctx, store, srv, levelVar, logger)
+
 	return srv.Run(ctx)
 }
 
-func newLogger(level string) *slog.Logger {
-	var lvl slog.Level
+func reloadOnSignal(ctx context.Context, store *config.Store, srv *server.Server, levelVar *slog.LevelVar, logger *slog.Logger) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP)
+	defer signal.Stop(ch)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+			doReload(store, srv, levelVar, logger)
+		}
+	}
+}
+
+func doReload(store *config.Store, srv *server.Server, levelVar *slog.LevelVar, logger *slog.Logger) {
+	newCfg, oldCfg, err := store.Reload()
+	if err != nil {
+		logger.Error("config reload failed; keeping previous snapshot",
+			"path", store.Path(), "error", err)
+		return
+	}
+
+	// Apply side-effects that are NOT just "read from store on next request":
+	//   - log level: backed by slog.LevelVar
+	//   - env file: re-source with overload so rotated keys take effect
+	if newCfg.Server.LogLevel != oldCfg.Server.LogLevel {
+		levelVar.Set(parseLevel(newCfg.Server.LogLevel))
+	}
+	if err := newCfg.ReloadEnvFile(); err != nil {
+		logger.Warn("env file reload failed", "error", err)
+	}
+
+	// Bind cannot be hot-changed without dropping the listener.
+	bindChanged := newCfg.Server.Bind != srv.Bind()
+
+	logger.Info("config reloaded",
+		"path", store.Path(),
+		"aliases", aliasNames(newCfg.Aliases),
+		"access_key", maskKey(newCfg.Server.AccessKey),
+		"log_level", newCfg.Server.LogLevel,
+		"env_file", newCfg.Server.EnvFile,
+		"access_key_rotated", newCfg.Server.AccessKey != oldCfg.Server.AccessKey,
+		"bind_change_ignored", bindChanged,
+	)
+	if bindChanged {
+		logger.Warn("server.bind changed but cannot hot-reload; restart required",
+			"current", srv.Bind(), "config", newCfg.Server.Bind)
+	}
+}
+
+func parseLevel(level string) slog.Level {
 	switch strings.ToLower(level) {
 	case "debug":
-		lvl = slog.LevelDebug
+		return slog.LevelDebug
 	case "warn", "warning":
-		lvl = slog.LevelWarn
+		return slog.LevelWarn
 	case "error":
-		lvl = slog.LevelError
+		return slog.LevelError
 	default:
-		lvl = slog.LevelInfo
+		return slog.LevelInfo
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
 }
 
 func aliasNames(m map[string]string) []string {

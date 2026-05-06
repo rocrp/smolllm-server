@@ -10,9 +10,13 @@ import (
 )
 
 type handlers struct {
-	cfg    *config.Config
+	store  *config.Store
 	logger *slog.Logger
 }
+
+// cfg returns the current config snapshot. Always call this — never cache
+// the result across request boundaries — so SIGHUP reloads take effect.
+func (h *handlers) cfg() *config.Config { return h.store.Get() }
 
 func (h *handlers) health(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

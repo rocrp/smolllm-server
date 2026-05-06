@@ -73,7 +73,8 @@ func newTestRig(t *testing.T, streaming bool) (*httptest.Server, *config.Config)
 		Aliases: map[string]string{"fast": "mock/marvin-7b"},
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := New(cfg, logger)
+	store := config.NewStore("", cfg)
+	srv := New(store, logger)
 	ts := httptest.NewServer(srv.HTTP.Handler)
 	t.Cleanup(ts.Close)
 	return ts, cfg
