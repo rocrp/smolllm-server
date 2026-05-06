@@ -49,26 +49,13 @@ make logs         # tail /tmp/personal.smolllm-server.log
 
 ### Hot reload
 
-Just edit the YAML — the server picks up changes automatically (~200 ms
-debounce). It watches the parent directory via fsnotify so atomic-rename
-saves from any editor are caught, then atomically swaps the config snapshot.
-In-flight requests keep the old snapshot for their full duration; the next
-request sees the new one.
+Just edit the YAML — the server picks it up automatically (~200 ms debounce
+via fsnotify). Hot-reloadable: `aliases`, `server.access_key`,
+`server.log_level`, and `server.env_file` contents (re-sourced with overwrite
+so rotated provider keys take effect). Invalid YAML is rejected and the
+previous snapshot is retained.
 
-You can also force a reload explicitly:
-
-```bash
-launchctl kill -SIGHUP gui/$(id -u)/personal.smolllm-server  # under launchd
-kill -HUP $(pgrep -x smolllm-server)                         # foreground
-```
-
-Hot-reloadable: `aliases`, `server.access_key`, `server.log_level`,
-`server.env_file` contents (re-sourced with overwrite, so rotated provider
-keys take effect). Invalid YAML is rejected and the previous snapshot is
-retained — the server keeps serving.
-
-NOT hot-reloadable: `server.bind`. A bind change is logged as a warning and
-ignored; use `make reload` to actually re-bind.
+For `server.bind` changes, or to force a clean restart, run `make reload`.
 
 The agent runs at `127.0.0.1:11435` and reads `~/.env.smolllm` itself on
 startup — no wrapper script.

@@ -68,70 +68,45 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Hot reload triggers:
-	//   1. SIGHUP — explicit reload (launchctl/kill -HUP)
-	//   2. fsnotify — auto reload when the YAML file changes on disk
-	// Both funnel into the same doReload(); aliases, access_key, log_level,
-	// and env_file contents take effect immediately. Bind drift is logged
-	// and ignored (requires `make reload` to actually re-bind).
-	reload := func() { doReload(store, srv, levelVar, logger) }
-	go reloadOnSignal(ctx, reload, logger)
-	go watchConfigFile(ctx, cfgPath, reload, logger)
+	// Auto-reload on file change. For bind changes (or any change you want
+	// to force-apply immediately even if the file didn't move), use
+	// `make reload`, which restarts the process.
+	go watchConfig(ctx, store, srv, levelVar, logger)
 
 	return srv.Run(ctx)
 }
 
-func reloadOnSignal(ctx context.Context, reload func(), logger *slog.Logger) {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGHUP)
-	defer signal.Stop(ch)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ch:
-			logger.Debug("reload triggered by SIGHUP")
-			reload()
-		}
-	}
-}
-
-// watchConfigFile auto-reloads when cfgPath changes on disk.
+// watchConfig auto-reloads when the config file changes on disk.
 //
-// We watch the *parent directory* rather than the file itself because most
-// editors save atomically: write to tmp → rename over original. After such
-// a rename, an inode-bound watch on the original file goes stale and
-// silently stops firing. Watching the directory and filtering by basename
-// catches both atomic renames and in-place writes.
+// We watch the parent directory because editors typically save atomically
+// (write tmp → rename over original); a watch bound to the original inode
+// would go stale after such a save. Filtering by basename inside the
+// directory catches both atomic renames and in-place writes.
 //
-// Events are debounced (200 ms) to coalesce the burst that editors emit
-// (CHMOD + WRITE + RENAME etc.) into a single reload.
-func watchConfigFile(ctx context.Context, cfgPath string, reload func(), logger *slog.Logger) {
+// A 200 ms debounce coalesces editor bursts (chmod + write + rename) into
+// a single reload.
+func watchConfig(ctx context.Context, store *config.Store, srv *server.Server, levelVar *slog.LevelVar, logger *slog.Logger) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		logger.Warn("fsnotify init failed; auto-reload disabled (SIGHUP still works)", "error", err)
+		logger.Warn("fsnotify init failed; auto-reload disabled", "error", err)
 		return
 	}
 	defer w.Close()
 
-	dir := filepath.Dir(cfgPath)
-	base := filepath.Base(cfgPath)
+	dir, base := filepath.Split(store.Path())
 	if err := w.Add(dir); err != nil {
 		logger.Warn("fsnotify add failed; auto-reload disabled", "dir", dir, "error", err)
 		return
 	}
-	logger.Info("config auto-reload enabled", "watching", cfgPath)
+	logger.Info("config auto-reload enabled", "watching", store.Path())
 
-	const debounce = 200 * time.Millisecond
-	var timer *time.Timer
-	fire := make(chan struct{}, 1)
+	var debounce *time.Timer
+	reload := func() { doReload(store, srv, levelVar, logger) }
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-
 		case ev, ok := <-w.Events:
 			if !ok {
 				return
@@ -139,27 +114,15 @@ func watchConfigFile(ctx context.Context, cfgPath string, reload func(), logger 
 			if filepath.Base(ev.Name) != base {
 				continue
 			}
-			// Coalesce bursts. Reset on every relevant event.
-			if timer == nil {
-				timer = time.AfterFunc(debounce, func() {
-					select {
-					case fire <- struct{}{}:
-					default:
-					}
-				})
-			} else {
-				timer.Reset(debounce)
+			if debounce != nil {
+				debounce.Stop()
 			}
-
+			debounce = time.AfterFunc(200*time.Millisecond, reload)
 		case err, ok := <-w.Errors:
 			if !ok {
 				return
 			}
 			logger.Warn("fsnotify error", "error", err)
-
-		case <-fire:
-			logger.Debug("reload triggered by file change", "path", cfgPath)
-			reload()
 		}
 	}
 }
@@ -172,9 +135,6 @@ func doReload(store *config.Store, srv *server.Server, levelVar *slog.LevelVar, 
 		return
 	}
 
-	// Apply side-effects that are NOT just "read from store on next request":
-	//   - log level: backed by slog.LevelVar
-	//   - env file: re-source with overload so rotated keys take effect
 	if newCfg.Server.LogLevel != oldCfg.Server.LogLevel {
 		levelVar.Set(parseLevel(newCfg.Server.LogLevel))
 	}
@@ -182,20 +142,14 @@ func doReload(store *config.Store, srv *server.Server, levelVar *slog.LevelVar, 
 		logger.Warn("env file reload failed", "error", err)
 	}
 
-	// Bind cannot be hot-changed without dropping the listener.
-	bindChanged := newCfg.Server.Bind != srv.Bind()
-
 	logger.Info("config reloaded",
 		"path", store.Path(),
 		"aliases", aliasNames(newCfg.Aliases),
 		"access_key", maskKey(newCfg.Server.AccessKey),
 		"log_level", newCfg.Server.LogLevel,
-		"env_file", newCfg.Server.EnvFile,
-		"access_key_rotated", newCfg.Server.AccessKey != oldCfg.Server.AccessKey,
-		"bind_change_ignored", bindChanged,
 	)
-	if bindChanged {
-		logger.Warn("server.bind changed but cannot hot-reload; restart required",
+	if newCfg.Server.Bind != srv.Bind() {
+		logger.Warn("server.bind changed but cannot hot-reload; run `make reload` to re-bind",
 			"current", srv.Bind(), "config", newCfg.Server.Bind)
 	}
 }
