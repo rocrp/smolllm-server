@@ -47,15 +47,19 @@ make uninstall    # bootout + remove symlink (binary & config preserved)
 make logs         # tail /tmp/personal.smolllm-server.log
 ```
 
-### Hot reload (SIGHUP)
+### Hot reload
 
-Send `SIGHUP` to swap config in-place without dropping in-flight requests:
+Just edit the YAML — the server picks up changes automatically (~200 ms
+debounce). It watches the parent directory via fsnotify so atomic-rename
+saves from any editor are caught, then atomically swaps the config snapshot.
+In-flight requests keep the old snapshot for their full duration; the next
+request sees the new one.
+
+You can also force a reload explicitly:
 
 ```bash
-# Local (PID file under launchd):
-launchctl kill -SIGHUP gui/$(id -u)/personal.smolllm-server
-# Or, if running in foreground:
-kill -HUP $(pgrep -x smolllm-server)
+launchctl kill -SIGHUP gui/$(id -u)/personal.smolllm-server  # under launchd
+kill -HUP $(pgrep -x smolllm-server)                         # foreground
 ```
 
 Hot-reloadable: `aliases`, `server.access_key`, `server.log_level`,

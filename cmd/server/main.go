@@ -7,9 +7,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/rocry/smolllm-server/internal/config"
 	"github.com/rocry/smolllm-server/internal/server"
 )
@@ -65,15 +68,20 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// SIGHUP → hot reload. Aliases, access_key, log_level, and env_file
-	// contents take effect immediately. Bind drift is logged and ignored
-	// (requires `make reload` to actually re-bind).
-	go reloadOnSignal(ctx, store, srv, levelVar, logger)
+	// Hot reload triggers:
+	//   1. SIGHUP — explicit reload (launchctl/kill -HUP)
+	//   2. fsnotify — auto reload when the YAML file changes on disk
+	// Both funnel into the same doReload(); aliases, access_key, log_level,
+	// and env_file contents take effect immediately. Bind drift is logged
+	// and ignored (requires `make reload` to actually re-bind).
+	reload := func() { doReload(store, srv, levelVar, logger) }
+	go reloadOnSignal(ctx, reload, logger)
+	go watchConfigFile(ctx, cfgPath, reload, logger)
 
 	return srv.Run(ctx)
 }
 
-func reloadOnSignal(ctx context.Context, store *config.Store, srv *server.Server, levelVar *slog.LevelVar, logger *slog.Logger) {
+func reloadOnSignal(ctx context.Context, reload func(), logger *slog.Logger) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGHUP)
 	defer signal.Stop(ch)
@@ -83,7 +91,75 @@ func reloadOnSignal(ctx context.Context, store *config.Store, srv *server.Server
 		case <-ctx.Done():
 			return
 		case <-ch:
-			doReload(store, srv, levelVar, logger)
+			logger.Debug("reload triggered by SIGHUP")
+			reload()
+		}
+	}
+}
+
+// watchConfigFile auto-reloads when cfgPath changes on disk.
+//
+// We watch the *parent directory* rather than the file itself because most
+// editors save atomically: write to tmp → rename over original. After such
+// a rename, an inode-bound watch on the original file goes stale and
+// silently stops firing. Watching the directory and filtering by basename
+// catches both atomic renames and in-place writes.
+//
+// Events are debounced (200 ms) to coalesce the burst that editors emit
+// (CHMOD + WRITE + RENAME etc.) into a single reload.
+func watchConfigFile(ctx context.Context, cfgPath string, reload func(), logger *slog.Logger) {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		logger.Warn("fsnotify init failed; auto-reload disabled (SIGHUP still works)", "error", err)
+		return
+	}
+	defer w.Close()
+
+	dir := filepath.Dir(cfgPath)
+	base := filepath.Base(cfgPath)
+	if err := w.Add(dir); err != nil {
+		logger.Warn("fsnotify add failed; auto-reload disabled", "dir", dir, "error", err)
+		return
+	}
+	logger.Info("config auto-reload enabled", "watching", cfgPath)
+
+	const debounce = 200 * time.Millisecond
+	var timer *time.Timer
+	fire := make(chan struct{}, 1)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case ev, ok := <-w.Events:
+			if !ok {
+				return
+			}
+			if filepath.Base(ev.Name) != base {
+				continue
+			}
+			// Coalesce bursts. Reset on every relevant event.
+			if timer == nil {
+				timer = time.AfterFunc(debounce, func() {
+					select {
+					case fire <- struct{}{}:
+					default:
+					}
+				})
+			} else {
+				timer.Reset(debounce)
+			}
+
+		case err, ok := <-w.Errors:
+			if !ok {
+				return
+			}
+			logger.Warn("fsnotify error", "error", err)
+
+		case <-fire:
+			logger.Debug("reload triggered by file change", "path", cfgPath)
+			reload()
 		}
 	}
 }
