@@ -18,6 +18,9 @@ type ChatRequest struct {
 	ReasoningEffort *string                                 `json:"reasoning_effort,omitempty"`
 	MaxTokens       *int                                    `json:"max_tokens,omitempty"`
 	N               *int                                    `json:"n,omitempty"`
+	// Timeout in seconds. 0 disables the timeout (relies on the request context).
+	// When omitted, smolllm-go's default applies.
+	Timeout         *float64                                `json:"timeout,omitempty"`
 
 	// Unsupported in v1; presence triggers 400.
 	Tools          json.RawMessage `json:"tools,omitempty"`

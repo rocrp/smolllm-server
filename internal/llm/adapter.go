@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rocry/smolllm-go/smolllm"
 )
@@ -56,6 +57,12 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.P
 	}
 	if req.ReasoningEffort != nil && strings.TrimSpace(*req.ReasoningEffort) != "" {
 		opts = append(opts, smolllm.WithReasoningEffort(*req.ReasoningEffort))
+	}
+	if req.Timeout != nil {
+		if *req.Timeout < 0 {
+			return smolllm.Prompt{}, nil, fmt.Errorf("timeout must be >= 0 (got %g)", *req.Timeout)
+		}
+		opts = append(opts, smolllm.WithTimeout(time.Duration(*req.Timeout*float64(time.Second))))
 	}
 	return prompt, opts, nil
 }
