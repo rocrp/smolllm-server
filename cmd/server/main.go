@@ -68,6 +68,17 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Shutdown watchdog: if anything stalls after signal arrives (graceful
+	// shutdown, deferred Close, runtime hang), force-exit so launchd's
+	// KeepAlive respawns us. Without this, a stuck-but-alive process is
+	// invisible to launchd and the service silently dies.
+	go func() {
+		<-ctx.Done()
+		time.Sleep(10 * time.Second)
+		fmt.Fprintln(os.Stderr, "shutdown watchdog: forcing exit after 10s")
+		os.Exit(1)
+	}()
+
 	// Auto-reload on file change. For bind changes (or any change you want
 	// to force-apply immediately even if the file didn't move), use
 	// `make reload`, which restarts the process.
