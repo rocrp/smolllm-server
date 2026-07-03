@@ -29,6 +29,7 @@ aliases:
 	require.Equal(t, "0.0.0.0:11435", cfg.Server.Bind)
 	require.Equal(t, "rocry", cfg.Server.AccessKey)
 	require.Equal(t, "debug", cfg.Server.LogLevel)
+	require.Equal(t, DefaultUsagePath, cfg.Server.UsagePath)
 	require.Equal(t, "cerebras/qwen-3,groq/qwen3-32b", cfg.Aliases["fast"])
 	require.Equal(t, "ollama/hy-mt:latest", cfg.ResolveModel("translator"))
 	require.Equal(t, "openai/gpt-4o-mini", cfg.ResolveModel("openai/gpt-4o-mini")) // passthrough
@@ -45,6 +46,22 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	require.Equal(t, DefaultBind, cfg.Server.Bind)
 	require.Equal(t, "somekey", cfg.Server.AccessKey)
 	require.Equal(t, DefaultLogLevel, cfg.Server.LogLevel)
+	require.Equal(t, DefaultUsagePath, cfg.Server.UsagePath)
+}
+
+func TestLoad_UsagePath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	usagePath := filepath.Join(dir, "usage.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("server:\n  access_key: somekey\n  usage_path: "+usagePath+"\n"), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, usagePath, cfg.Server.UsagePath)
+	resolved, err := cfg.UsagePath()
+	require.NoError(t, err)
+	require.Equal(t, usagePath, resolved)
 }
 
 func TestLoad_AccessKeyRequired(t *testing.T) {

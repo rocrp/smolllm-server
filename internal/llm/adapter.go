@@ -3,6 +3,7 @@ package llm
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -55,6 +56,19 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.P
 	if req.TopP != nil {
 		opts = append(opts, smolllm.WithTopP(*req.TopP))
 	}
+	if req.MaxTokens != nil {
+		opts = append(opts, smolllm.WithMaxTokens(*req.MaxTokens))
+	}
+	if len(req.Stop) > 0 {
+		stops, err := decodeStop(req.Stop)
+		if err != nil {
+			return smolllm.Prompt{}, nil, err
+		}
+		opts = append(opts, smolllm.WithStop(stops...))
+	}
+	if req.Seed != nil {
+		opts = append(opts, smolllm.WithSeed(*req.Seed))
+	}
 	if req.ReasoningEffort != nil && strings.TrimSpace(*req.ReasoningEffort) != "" {
 		opts = append(opts, smolllm.WithReasoningEffort(*req.ReasoningEffort))
 	}
@@ -65,6 +79,30 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.P
 		opts = append(opts, smolllm.WithTimeout(time.Duration(*req.Timeout*float64(time.Second))))
 	}
 	return prompt, opts, nil
+}
+
+func decodeStop(raw json.RawMessage) ([]string, error) {
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		if strings.TrimSpace(single) == "" {
+			return nil, errors.New("stop must not be empty")
+		}
+		return []string{single}, nil
+	}
+
+	var multiple []string
+	if err := json.Unmarshal(raw, &multiple); err != nil {
+		return nil, errors.New("stop must be a string or array of strings")
+	}
+	if len(multiple) == 0 {
+		return nil, errors.New("stop must contain at least one entry")
+	}
+	for _, stop := range multiple {
+		if strings.TrimSpace(stop) == "" {
+			return nil, errors.New("stop entries must not be empty")
+		}
+	}
+	return multiple, nil
 }
 
 // NewID returns an OpenAI-style chat completion ID, e.g. "chatcmpl-1f2a...".

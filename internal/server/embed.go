@@ -31,6 +31,7 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 		smolllm.WithModel(model),
 		smolllm.WithLogger(h.logger),
 	}
+	opts = h.appendUsageHook(opts, req.Model, false)
 	if req.Dimensions != nil && *req.Dimensions > 0 {
 		opts = append(opts, smolllm.WithDimensions(*req.Dimensions))
 	}

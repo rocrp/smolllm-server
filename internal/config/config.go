@@ -16,6 +16,7 @@ import (
 const (
 	DefaultBind       = "0.0.0.0:11435"
 	DefaultLogLevel   = "info"
+	DefaultUsagePath  = "~/.local/state/smolllm-server/usage.jsonl"
 	EnvAccessKey      = "SMOLLLM_SERVER_ACCESS_KEY"
 	EnvConfigPath     = "SMOLLLM_SERVER_CONFIG"
 	DefaultConfigPath = "~/.config/smolllm-server/config.yaml"
@@ -32,6 +33,7 @@ type ServerConfig struct {
 	AccessKey string `yaml:"access_key"`
 	EnvFile   string `yaml:"env_file"`
 	LogLevel  string `yaml:"log_level"`
+	UsagePath string `yaml:"usage_path"`
 }
 
 // Load reads YAML from path, applies env overrides and defaults, and validates.
@@ -70,6 +72,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Server.EnvFile == "" {
 		c.Server.EnvFile = DefaultEnvFile
+	}
+	if c.Server.UsagePath == "" {
+		c.Server.UsagePath = DefaultUsagePath
 	}
 	if c.Aliases == nil {
 		c.Aliases = map[string]string{}
@@ -119,6 +124,14 @@ func (c *Config) EnvFilePath() (string, error) {
 		return "", nil
 	}
 	return expandHome(c.Server.EnvFile)
+}
+
+// UsagePath returns the expanded JSONL metering path.
+func (c *Config) UsagePath() (string, error) {
+	if c.Server.UsagePath == "" {
+		return "", nil
+	}
+	return expandHome(c.Server.UsagePath)
 }
 
 // LoadEnvFile loads environment variables from the configured env file.

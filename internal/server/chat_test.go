@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,7 +23,7 @@ import (
 // handlers. Caller closes both servers via t.Cleanup.
 //
 // `streaming` controls whether the upstream returns SSE.
-func newTestRig(t *testing.T, streaming bool) (*httptest.Server, *config.Config) {
+func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]any)) (*httptest.Server, *config.Config) {
 	t.Helper()
 
 	// smolllm-go always sends `stream: true` upstream and reassembles into a
@@ -34,6 +35,9 @@ func newTestRig(t *testing.T, streaming bool) (*httptest.Server, *config.Config)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		require.Equal(t, "marvin-7b", body["model"])
+		for _, inspect := range inspectRequest {
+			inspect(body)
+		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
@@ -69,6 +73,7 @@ func newTestRig(t *testing.T, streaming bool) (*httptest.Server, *config.Config)
 			Bind:      "127.0.0.1:0",
 			AccessKey: "rocry",
 			LogLevel:  "warn",
+			UsagePath: filepath.Join(t.TempDir(), "usage.jsonl"),
 		},
 		Aliases: map[string]string{"fast": "mock/marvin-7b"},
 	}
@@ -101,6 +106,31 @@ func TestChatCompletions_Blocking(t *testing.T) {
 	require.Equal(t, "assistant", out.Choices[0].Message.Role)
 	require.Equal(t, "42", out.Choices[0].Message.Content)
 	require.Equal(t, "stop", out.Choices[0].FinishReason)
+	require.Equal(t, 3, out.Usage.PromptTokens)
+	require.Equal(t, 1, out.Usage.CompletionTokens)
+}
+
+func TestChatCompletions_ForwardsCommonGenerationParams(t *testing.T) {
+	var captured map[string]any
+	ts, _ := newTestRig(t, false, func(body map[string]any) {
+		captured = body
+	})
+
+	body := `{"model":"fast","max_tokens":128,"stop":["END","STOP"],"seed":42,"messages":[{"role":"user","content":"what is the answer?"}]}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rocry")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NotNil(t, captured)
+	require.InDelta(t, 128, captured["max_tokens"], 1e-9)
+	require.Equal(t, []any{"END", "STOP"}, captured["stop"])
+	require.InDelta(t, 42, captured["seed"], 1e-9)
 }
 
 func TestChatCompletions_Streaming(t *testing.T) {
@@ -141,6 +171,130 @@ func TestChatCompletions_Streaming(t *testing.T) {
 	require.NoError(t, scanner.Err())
 	require.True(t, doneSeen, "expected [DONE] frame")
 	require.Equal(t, "hello", collected.String())
+}
+
+func TestChatCompletions_StreamingWaitErrorUsesTerminalChunk(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n")
+		flusher.Flush()
+		_, _ = fmt.Fprint(w, "data: {bad-json}\n\n")
+		flusher.Flush()
+	}))
+	t.Cleanup(upstream.Close)
+
+	t.Setenv("MOCK_BASE_URL", upstream.URL)
+	t.Setenv("MOCK_API_KEY", "secret-mock-key")
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Bind:      "127.0.0.1:0",
+			AccessKey: "rocry",
+			LogLevel:  "warn",
+			UsagePath: filepath.Join(t.TempDir(), "usage.jsonl"),
+		},
+		Aliases: map[string]string{"fast": "mock/marvin-7b"},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := New(config.NewStore("", cfg), logger)
+	ts := httptest.NewServer(srv.HTTP.Handler)
+	t.Cleanup(ts.Close)
+
+	body := `{"model":"fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rocry")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var terminal struct {
+		Choices []struct {
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	var doneSeen bool
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			doneSeen = true
+			break
+		}
+		var frame struct {
+			Choices []struct {
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(payload), &frame))
+		if frame.Error != nil {
+			terminal = frame
+		}
+	}
+	require.NoError(t, scanner.Err())
+	require.True(t, doneSeen)
+	require.NotNil(t, terminal.Error)
+	require.Contains(t, terminal.Error.Message, "malformed streaming chunk")
+	require.Len(t, terminal.Choices, 1)
+	require.NotNil(t, terminal.Choices[0].FinishReason)
+	require.Equal(t, "error", *terminal.Choices[0].FinishReason)
+}
+
+func TestStats_AggregatesUsageMeter(t *testing.T) {
+	ts, cfg := newTestRig(t, false)
+
+	body := `{"model":"fast","messages":[{"role":"user","content":"what is the answer?"}]}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rocry")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	req, err = http.NewRequest(http.MethodGet, ts.URL+"/v1/stats?days=7", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rocry")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var out struct {
+		Object string `json:"object"`
+		Data   []struct {
+			Alias        string `json:"alias"`
+			Provider     string `json:"provider"`
+			Requests     int    `json:"requests"`
+			InputTokens  int    `json:"input_tokens"`
+			OutputTokens int    `json:"output_tokens"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	require.Equal(t, "usage_stats", out.Object)
+	require.Len(t, out.Data, 1)
+	require.Equal(t, "fast", out.Data[0].Alias)
+	require.Equal(t, "mock", out.Data[0].Provider)
+	require.Equal(t, 1, out.Data[0].Requests)
+	require.Equal(t, 3, out.Data[0].InputTokens)
+	require.Equal(t, 1, out.Data[0].OutputTokens)
+	require.FileExists(t, cfg.Server.UsagePath)
 }
 
 func TestChatCompletions_RejectsTools(t *testing.T) {

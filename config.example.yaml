@@ -9,6 +9,7 @@ server:
   # Loaded at startup; existing env vars are NOT overwritten.
   env_file: ~/.env.smolllm
   log_level: info  # debug | info | warn | error
+  usage_path: ~/.local/state/smolllm-server/usage.jsonl
 
 # Aliases map a logical name to a comma-separated provider/model fallback chain.
 # smolllm-go tries each entry in order and falls back on errors.

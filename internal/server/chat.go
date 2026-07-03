@@ -24,6 +24,7 @@ func (h *handlers) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts = append(opts, smolllm.WithLogger(h.logger))
+	opts = h.appendUsageHook(opts, req.Model, req.Stream)
 
 	if req.Stream {
 		h.chatStream(w, r, prompt, opts)
@@ -94,10 +95,12 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, prompt smo
 	})
 
 	ctx := r.Context()
-	streamLoop:
+streamLoop:
 	for {
 		select {
 		case <-ctx.Done():
+			stream.Stream.Close()
+			_ = stream.Stream.Wait()
 			return
 		case chunk, ok := <-stream.Stream.Chan():
 			if !ok {
@@ -120,7 +123,12 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, prompt smo
 	}
 
 	if err := stream.Stream.Wait(); err != nil {
-		writeRaw(w, flusher, fmt.Sprintf(`{"error":{"message":%q,"type":"api_error"}}`, err.Error()))
+		reason := "error"
+		writeChunk(w, flusher, llm.ChatCompletionChunk{
+			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+			Choices: []llm.ChatChoiceDelta{{Index: 0, Delta: llm.ChatDelta{}, FinishReason: &reason}},
+			Error:   &llm.ChatStreamError{Message: err.Error(), Type: "api_error"},
+		})
 		writeRaw(w, flusher, "[DONE]")
 		return
 	}

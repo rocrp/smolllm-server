@@ -38,6 +38,7 @@ func New(store *config.Store, logger *slog.Logger) *Server {
 	mux.Handle("POST /v1/chat/completions", authMW(http.HandlerFunc(h.chat)))
 	mux.Handle("POST /v1/embeddings", authMW(http.HandlerFunc(h.embeddings)))
 	mux.Handle("GET /v1/models", authMW(http.HandlerFunc(h.models)))
+	mux.Handle("GET /v1/stats", authMW(http.HandlerFunc(h.stats)))
 
 	wrapped := chain(mux, recoverMW(logger), logMW(logger))
 

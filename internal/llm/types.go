@@ -10,17 +10,19 @@ import (
 // we actually forward are explicit; the rest is captured in Extras for future
 // pass-through but currently ignored.
 type ChatRequest struct {
-	Model           string                                  `json:"model"`
+	Model           string                                   `json:"model"`
 	Messages        []openai.ChatCompletionMessageParamUnion `json:"messages"`
-	Stream          bool                                    `json:"stream"`
-	Temperature     *float64                                `json:"temperature,omitempty"`
-	TopP            *float64                                `json:"top_p,omitempty"`
-	ReasoningEffort *string                                 `json:"reasoning_effort,omitempty"`
-	MaxTokens       *int                                    `json:"max_tokens,omitempty"`
-	N               *int                                    `json:"n,omitempty"`
+	Stream          bool                                     `json:"stream"`
+	Temperature     *float64                                 `json:"temperature,omitempty"`
+	TopP            *float64                                 `json:"top_p,omitempty"`
+	ReasoningEffort *string                                  `json:"reasoning_effort,omitempty"`
+	MaxTokens       *int                                     `json:"max_tokens,omitempty"`
+	Stop            json.RawMessage                          `json:"stop,omitempty"`
+	Seed            *int                                     `json:"seed,omitempty"`
+	N               *int                                     `json:"n,omitempty"`
 	// Timeout in seconds. 0 disables the timeout (relies on the request context).
 	// When omitted, smolllm-go's default applies.
-	Timeout         *float64                                `json:"timeout,omitempty"`
+	Timeout *float64 `json:"timeout,omitempty"`
 
 	// Unsupported in v1; presence triggers 400.
 	Tools          json.RawMessage `json:"tools,omitempty"`
@@ -38,11 +40,11 @@ type EmbeddingRequest struct {
 
 // ChatCompletion is the OpenAI non-streaming response shape.
 type ChatCompletion struct {
-	ID      string         `json:"id"`
-	Object  string         `json:"object"`
-	Created int64          `json:"created"`
-	Model   string         `json:"model"`
-	Choices []ChatChoice   `json:"choices"`
+	ID      string          `json:"id"`
+	Object  string          `json:"object"`
+	Created int64           `json:"created"`
+	Model   string          `json:"model"`
+	Choices []ChatChoice    `json:"choices"`
 	Usage   CompletionUsage `json:"usage"`
 }
 
@@ -66,11 +68,17 @@ type CompletionUsage struct {
 
 // ChatCompletionChunk is a single SSE frame for streaming chat.
 type ChatCompletionChunk struct {
-	ID      string             `json:"id"`
-	Object  string             `json:"object"`
-	Created int64              `json:"created"`
-	Model   string             `json:"model"`
-	Choices []ChatChoiceDelta  `json:"choices"`
+	ID      string            `json:"id"`
+	Object  string            `json:"object"`
+	Created int64             `json:"created"`
+	Model   string            `json:"model"`
+	Choices []ChatChoiceDelta `json:"choices"`
+	Error   *ChatStreamError  `json:"error,omitempty"`
+}
+
+type ChatStreamError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
 }
 
 type ChatChoiceDelta struct {
