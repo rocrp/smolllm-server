@@ -26,13 +26,13 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.P
 		return smolllm.Prompt{}, nil, errors.New("messages must not be empty")
 	}
 
-	if len(req.Tools) > 0 {
+	if !isJSONNullOrEmpty(req.Tools) {
 		return smolllm.Prompt{}, nil, errors.New("tools are not yet supported by smolllm-server")
 	}
-	if len(req.Functions) > 0 {
+	if !isJSONNullOrEmpty(req.Functions) {
 		return smolllm.Prompt{}, nil, errors.New("functions are not yet supported by smolllm-server")
 	}
-	if len(req.ResponseFormat) > 0 {
+	if !isJSONNullOrEmpty(req.ResponseFormat) {
 		return smolllm.Prompt{}, nil, errors.New("response_format is not yet supported by smolllm-server")
 	}
 	if req.N != nil && *req.N != 1 {
@@ -57,9 +57,12 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.P
 		opts = append(opts, smolllm.WithTopP(*req.TopP))
 	}
 	if req.MaxTokens != nil {
+		if *req.MaxTokens <= 0 {
+			return smolllm.Prompt{}, nil, fmt.Errorf("max_tokens must be positive (got %d)", *req.MaxTokens)
+		}
 		opts = append(opts, smolllm.WithMaxTokens(*req.MaxTokens))
 	}
-	if len(req.Stop) > 0 {
+	if !isJSONNullOrEmpty(req.Stop) {
 		stops, err := decodeStop(req.Stop)
 		if err != nil {
 			return smolllm.Prompt{}, nil, err
@@ -81,7 +84,32 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.P
 	return prompt, opts, nil
 }
 
+func isJSONNullOrEmpty(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return true
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false
+	}
+	switch decoded := value.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(decoded) == 0
+	case map[string]any:
+		return len(decoded) == 0
+	default:
+		return false
+	}
+}
+
 func decodeStop(raw json.RawMessage) ([]string, error) {
+	if isJSONNullOrEmpty(raw) {
+		return nil, nil
+	}
+
 	var single string
 	if err := json.Unmarshal(raw, &single); err == nil {
 		if strings.TrimSpace(single) == "" {

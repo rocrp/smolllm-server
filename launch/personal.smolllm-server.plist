@@ -12,8 +12,14 @@
     <string>/Users/rocry/w/smolllm-server</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>HOME</key>
+        <string>/Users/rocry</string>
         <key>PATH</key>
         <string>/Users/rocry/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>SMOLLLM_SERVER_CONFIG</key>
+        <string>/Users/rocry/.config/smolllm-server/config.yaml</string>
+        <key>USER</key>
+        <string>rocry</string>
     </dict>
     <key>StandardOutPath</key>
     <string>/tmp/personal.smolllm-server.log</string>

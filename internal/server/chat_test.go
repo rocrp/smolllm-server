@@ -133,6 +133,77 @@ func TestChatCompletions_ForwardsCommonGenerationParams(t *testing.T) {
 	require.InDelta(t, 42, captured["seed"], 1e-9)
 }
 
+func TestChatCompletions_AcceptsNullishOptionalFields(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "stop null",
+			body: `{"model":"fast","stop":null,"messages":[{"role":"user","content":"hi"}]}`,
+		},
+		{
+			name: "stop empty array",
+			body: `{"model":"fast","stop":[],"messages":[{"role":"user","content":"hi"}]}`,
+		},
+		{
+			name: "tools null",
+			body: `{"model":"fast","tools":null,"messages":[{"role":"user","content":"hi"}]}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newTestRig(t, false)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(tc.body))
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer rocry")
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+		})
+	}
+}
+
+func TestChatCompletions_RejectsEmptyStopString(t *testing.T) {
+	ts, _ := newTestRig(t, false)
+
+	body := `{"model":"fast","stop":"","messages":[{"role":"user","content":"hi"}]}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rocry")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestChatCompletions_RejectsNonPositiveMaxTokens(t *testing.T) {
+	ts, _ := newTestRig(t, false)
+
+	body := `{"model":"fast","max_tokens":0,"messages":[{"role":"user","content":"hi"}]}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rocry")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var env struct {
+		Error struct{ Message string } `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
+	require.Contains(t, env.Error.Message, "max_tokens")
+}
+
 func TestChatCompletions_Streaming(t *testing.T) {
 	ts, _ := newTestRig(t, true)
 

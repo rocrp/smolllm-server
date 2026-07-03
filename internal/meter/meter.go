@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,9 +31,10 @@ type Record struct {
 }
 
 type StatsResponse struct {
-	Object string        `json:"object"`
-	Days   int           `json:"days"`
-	Data   []StatsBucket `json:"data"`
+	Object       string        `json:"object"`
+	Days         int           `json:"days"`
+	SkippedLines int           `json:"skipped_lines,omitempty"`
+	Data         []StatsBucket `json:"data"`
 }
 
 type StatsBucket struct {
@@ -99,34 +102,48 @@ func ReadStats(path string, days int, now time.Time) (StatsResponse, error) {
 
 	cutoff := now.UTC().AddDate(0, 0, -days)
 	groups := map[string]*aggregate{}
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		var record Record
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			return resp, fmt.Errorf("decode usage record: %w", err)
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return resp, fmt.Errorf("read usage file: %w", err)
 		}
-		if record.Timestamp.IsZero() || record.Timestamp.UTC().Before(cutoff) {
+		atEOF := errors.Is(err, io.EOF)
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if atEOF {
+				break
+			}
 			continue
+		} else if len(line) > 1024*1024 {
+			resp.SkippedLines++
+		} else {
+			var record Record
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				resp.SkippedLines++
+			} else if !record.Timestamp.IsZero() && !record.Timestamp.UTC().Before(cutoff) {
+				day := record.Timestamp.UTC().Format("2006-01-02")
+				key := day + "\x00" + record.Alias + "\x00" + record.Provider
+				agg := groups[key]
+				if agg == nil {
+					agg = &aggregate{StatsBucket: StatsBucket{Day: day, Alias: record.Alias, Provider: record.Provider}}
+					groups[key] = agg
+				}
+				agg.Requests++
+				if !record.OK {
+					agg.Errors++
+				}
+				agg.InputTokens += record.InputTokens
+				agg.OutputTokens += record.OutputTokens
+				agg.TotalTokens += record.InputTokens + record.OutputTokens
+				agg.totalDurationMS += record.DurationMS
+			}
 		}
-		day := record.Timestamp.UTC().Format("2006-01-02")
-		key := day + "\x00" + record.Alias + "\x00" + record.Provider
-		agg := groups[key]
-		if agg == nil {
-			agg = &aggregate{StatsBucket: StatsBucket{Day: day, Alias: record.Alias, Provider: record.Provider}}
-			groups[key] = agg
+
+		if atEOF {
+			break
 		}
-		agg.Requests++
-		if !record.OK {
-			agg.Errors++
-		}
-		agg.InputTokens += record.InputTokens
-		agg.OutputTokens += record.OutputTokens
-		agg.TotalTokens += record.InputTokens + record.OutputTokens
-		agg.totalDurationMS += record.DurationMS
-	}
-	if err := scanner.Err(); err != nil {
-		return resp, fmt.Errorf("scan usage file: %w", err)
 	}
 
 	resp.Data = make([]StatsBucket, 0, len(groups))
