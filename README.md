@@ -29,7 +29,6 @@ server:
   access_key: change-me       # REQUIRED. SMOLLLM_SERVER_ACCESS_KEY env wins if set
   env_file: ~/.env.smolllm    # provider keys: ${PROVIDER}_API_KEY etc.
   log_level: info
-  usage_path: ~/.local/state/smolllm-server/usage.jsonl
 
 aliases:
   fast: cerebras/qwen-3-235b-a22b-instruct-2507,groq/qwen/qwen3-32b!none,gemini/gemini-flash-latest
@@ -66,8 +65,8 @@ The agent runs at `0.0.0.0:11435` (all interfaces, LAN-accessible) and reads
 | | |
 |---|---|
 | `GET /healthz`           | Public liveness probe. |
+| `GET /stats`             | In-memory per-attempt token usage for the last ~31 UTC days. Auth required. |
 | `GET /v1/models`         | Lists configured aliases. Auth required. |
-| `GET /v1/stats?days=7`   | Usage rollups by day, alias, and provider. Auth required. |
 | `POST /v1/chat/completions` | OpenAI Chat Completions. Auth required. Streaming via `stream: true`. |
 | `POST /v1/embeddings`    | OpenAI Embeddings. Auth required. |
 

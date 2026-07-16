@@ -7,11 +7,13 @@ import (
 
 	"github.com/rocry/smolllm-server/internal/apierr"
 	"github.com/rocry/smolllm-server/internal/config"
+	"github.com/rocry/smolllm-server/internal/ledger"
 )
 
 type handlers struct {
 	store  *config.Store
 	logger *slog.Logger
+	ledger *ledger.Ledger
 }
 
 // cfg returns the current config snapshot. Always call this — never cache

@@ -9,11 +9,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/rocry/smolllm-server/internal/config"
+	"github.com/rocry/smolllm-server/internal/ledger"
 	"github.com/rocry/smolllm-server/internal/llm"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +29,6 @@ func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]
 	// smolllm-go always sends `stream: true` upstream and reassembles into a
 	// Response when the caller used Ask(). So our mock provider always emits SSE.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/v1/chat/completions", r.URL.Path)
 		require.Equal(t, "Bearer secret-mock-key", r.Header.Get("Authorization"))
 
 		var body map[string]any
@@ -40,6 +39,16 @@ func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]
 				inspect(body)
 			}
 		}
+		if r.URL.Path == "/v1/embeddings" {
+			w.Header().Set("Content-Type", "application/json")
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"data":  []map[string]any{{"index": 0, "embedding": []float64{0.1, 0.2}}},
+				"model": "marvin-7b",
+				"usage": map[string]int{"prompt_tokens": 2, "total_tokens": 2},
+			}))
+			return
+		}
+		require.Equal(t, "/v1/chat/completions", r.URL.Path)
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
@@ -75,7 +84,6 @@ func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]
 			Bind:      "127.0.0.1:0",
 			AccessKey: "rocry",
 			LogLevel:  "warn",
-			UsagePath: filepath.Join(t.TempDir(), "usage.jsonl"),
 		},
 		Aliases: map[string]string{"fast": "mock/marvin-7b"},
 	}
@@ -246,7 +254,6 @@ func TestChatCompletions_StreamingWaitErrorUsesTerminalChunk(t *testing.T) {
 			Bind:      "127.0.0.1:0",
 			AccessKey: "rocry",
 			LogLevel:  "warn",
-			UsagePath: filepath.Join(t.TempDir(), "usage.jsonl"),
 		},
 		Aliases: map[string]string{"fast": "mock/marvin-7b"},
 	}
@@ -306,49 +313,6 @@ func TestChatCompletions_StreamingWaitErrorUsesTerminalChunk(t *testing.T) {
 	require.Len(t, terminal.Choices, 1)
 	require.NotNil(t, terminal.Choices[0].FinishReason)
 	require.Equal(t, "error", *terminal.Choices[0].FinishReason)
-}
-
-func TestStats_AggregatesUsageMeter(t *testing.T) {
-	ts, cfg := newTestRig(t, false)
-
-	body := `{"model":"fast","messages":[{"role":"user","content":"what is the answer?"}]}`
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer rocry")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	req, err = http.NewRequest(http.MethodGet, ts.URL+"/v1/stats?days=7", nil)
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer rocry")
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var out struct {
-		Object string `json:"object"`
-		Data   []struct {
-			Alias        string `json:"alias"`
-			Provider     string `json:"provider"`
-			Requests     int    `json:"requests"`
-			InputTokens  int    `json:"input_tokens"`
-			OutputTokens int    `json:"output_tokens"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
-	require.Equal(t, "usage_stats", out.Object)
-	require.Len(t, out.Data, 1)
-	require.Equal(t, "fast", out.Data[0].Alias)
-	require.Equal(t, "mock", out.Data[0].Provider)
-	require.Equal(t, 1, out.Data[0].Requests)
-	require.Equal(t, 3, out.Data[0].InputTokens)
-	require.Equal(t, 1, out.Data[0].OutputTokens)
-	require.FileExists(t, cfg.Server.UsagePath)
 }
 
 func TestChatCompletions_RejectsTools(t *testing.T) {
@@ -442,4 +406,126 @@ func TestChatCompletions_RejectsNonPositiveMaxTokens(t *testing.T) {
 			require.Contains(t, env.Error.Message, "max_tokens must be positive")
 		})
 	}
+}
+
+func TestStats_AggregatesChatAndEmbeddingAttempts(t *testing.T) {
+	ts, _ := newTestRig(t, false, nil)
+
+	requests := []struct {
+		path string
+		body string
+	}{
+		{path: "/v1/chat/completions", body: `{"model":"fast","messages":[{"role":"user","content":"hi"}]}`},
+		{path: "/v1/chat/completions", body: `{"model":"fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`},
+		{path: "/v1/chat/completions", body: `{"model":"mock/marvin-7b","messages":[{"role":"user","content":"hi"}]}`},
+		{path: "/v1/embeddings", body: `{"model":"fast","input":"hi"}`},
+	}
+	for _, request := range requests {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+request.path, strings.NewReader(request.body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer rocry")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		_, err = io.Copy(io.Discard, resp.Body)
+		require.NoError(t, err)
+	}
+
+	unauthorized, err := http.Get(ts.URL + "/stats")
+	require.NoError(t, err)
+	defer unauthorized.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, unauthorized.StatusCode)
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/stats", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rocry")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var out struct {
+		Buckets []ledger.Bucket `json:"buckets"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	require.Len(t, out.Buckets, 2)
+	day := out.Buckets[0].Day
+	require.Equal(t, []ledger.Bucket{
+		{
+			Day:          day,
+			Alias:        "fast",
+			Provider:     "mock",
+			Model:        "marvin-7b",
+			Requests:     3,
+			InputTokens:  8,
+			OutputTokens: 2,
+		},
+		{
+			Day:          day,
+			Alias:        "mock/marvin-7b",
+			Provider:     "mock",
+			Model:        "marvin-7b",
+			Requests:     1,
+			InputTokens:  3,
+			OutputTokens: 1,
+		},
+	}, out.Buckets)
+}
+
+func TestStats_RecordsFailedAttempt(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "denied", http.StatusUnauthorized)
+	}))
+	t.Cleanup(upstream.Close)
+	t.Setenv("MOCK_BASE_URL", upstream.URL)
+	t.Setenv("MOCK_API_KEY", "secret-mock-key")
+
+	cfg := &config.Config{
+		Server:  config.ServerConfig{Bind: "127.0.0.1:0", AccessKey: "rocry", LogLevel: "warn"},
+		Aliases: map[string]string{"fast": "mock/marvin-7b"},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := New(config.NewStore("", cfg), logger)
+	ts := httptest.NewServer(srv.HTTP.Handler)
+	t.Cleanup(ts.Close)
+
+	requests := []struct {
+		path string
+		body string
+	}{
+		{path: "/v1/chat/completions", body: `{"model":"fast","messages":[{"role":"user","content":"hi"}]}`},
+		{path: "/v1/embeddings", body: `{"model":"fast","input":"hi"}`},
+	}
+	for _, request := range requests {
+		failedReq, err := http.NewRequest(http.MethodPost, ts.URL+request.path, strings.NewReader(request.body))
+		require.NoError(t, err)
+		failedReq.Header.Set("Authorization", "Bearer rocry")
+		failedReq.Header.Set("Content-Type", "application/json")
+		failedResp, err := http.DefaultClient.Do(failedReq)
+		require.NoError(t, err)
+		defer failedResp.Body.Close()
+		require.Equal(t, http.StatusBadGateway, failedResp.StatusCode)
+	}
+
+	statsReq, err := http.NewRequest(http.MethodGet, ts.URL+"/stats", nil)
+	require.NoError(t, err)
+	statsReq.Header.Set("Authorization", "Bearer rocry")
+	statsResp, err := http.DefaultClient.Do(statsReq)
+	require.NoError(t, err)
+	defer statsResp.Body.Close()
+	require.Equal(t, http.StatusOK, statsResp.StatusCode)
+
+	var out struct {
+		Buckets []ledger.Bucket `json:"buckets"`
+	}
+	require.NoError(t, json.NewDecoder(statsResp.Body).Decode(&out))
+	require.Len(t, out.Buckets, 1)
+	require.Equal(t, "fast", out.Buckets[0].Alias)
+	require.Equal(t, "mock", out.Buckets[0].Provider)
+	require.Equal(t, "marvin-7b", out.Buckets[0].Model)
+	require.Equal(t, 2, out.Buckets[0].Requests)
+	require.Equal(t, 2, out.Buckets[0].Failures)
+	require.Equal(t, 2, out.Buckets[0].EstimatedRequests)
 }
