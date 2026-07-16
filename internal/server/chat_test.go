@@ -25,6 +25,20 @@ import (
 // `streaming` controls the response fixture shape.
 func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]any)) (*httptest.Server, *config.Config) {
 	t.Helper()
+	return newTestRigWithFinishReason(t, streaming, "stop", inspectRequest...)
+}
+
+func newTestRigWithFinishReason(
+	t *testing.T,
+	streaming bool,
+	providerFinishReason string,
+	inspectRequest ...func(map[string]any),
+) (*httptest.Server, *config.Config) {
+	t.Helper()
+	terminalChoice := `{"index":0,"delta":{}}`
+	if providerFinishReason != "" {
+		terminalChoice = fmt.Sprintf(`{"index":0,"delta":{},"finish_reason":%q}`, providerFinishReason)
+	}
 
 	// smolllm-go always sends `stream: true` upstream and reassembles into a
 	// Response when the caller used Ask(). So our mock provider always emits SSE.
@@ -58,13 +72,13 @@ func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]
 			// Single content chunk → reassembles to "42" via Ask.
 			frames = []string{
 				`{"id":"x","object":"chat.completion.chunk","model":"marvin-7b","choices":[{"index":0,"delta":{"role":"assistant","content":"42"}}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
-				`{"id":"x","object":"chat.completion.chunk","model":"marvin-7b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+				fmt.Sprintf(`{"id":"x","object":"chat.completion.chunk","model":"marvin-7b","choices":[%s]}`, terminalChoice),
 			}
 		} else {
 			frames = []string{
 				`{"id":"x","object":"chat.completion.chunk","model":"marvin-7b","choices":[{"index":0,"delta":{"role":"assistant","content":"hel"}}]}`,
 				`{"id":"x","object":"chat.completion.chunk","model":"marvin-7b","choices":[{"index":0,"delta":{"content":"lo"}}]}`,
-				`{"id":"x","object":"chat.completion.chunk","model":"marvin-7b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+				fmt.Sprintf(`{"id":"x","object":"chat.completion.chunk","model":"marvin-7b","choices":[%s],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`, terminalChoice),
 			}
 		}
 		for _, f := range frames {
@@ -313,6 +327,61 @@ func TestChatCompletions_StreamingWaitErrorUsesTerminalChunk(t *testing.T) {
 	require.Len(t, terminal.Choices, 1)
 	require.NotNil(t, terminal.Choices[0].FinishReason)
 	require.Equal(t, "error", *terminal.Choices[0].FinishReason)
+}
+
+func TestChatCompletions_ReportsProviderFinishReason(t *testing.T) {
+	tests := []struct {
+		name           string
+		stream         bool
+		providerReason string
+		want           string
+	}{
+		{name: "blocking length", providerReason: "length", want: "length"},
+		{name: "streaming length", stream: true, providerReason: "length", want: "length"},
+		{name: "blocking omitted", want: "stop"},
+		{name: "streaming omitted", stream: true, want: "stop"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts, _ := newTestRigWithFinishReason(t, tt.stream, tt.providerReason)
+			body := fmt.Sprintf(
+				`{"model":"fast","stream":%t,"messages":[{"role":"user","content":"hi"}]}`,
+				tt.stream,
+			)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer rocry")
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+
+			if !tt.stream {
+				var out llm.ChatCompletion
+				require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+				require.Len(t, out.Choices, 1)
+				require.Equal(t, tt.want, out.Choices[0].FinishReason)
+				return
+			}
+
+			var got string
+			scanner := bufio.NewScanner(resp.Body)
+			for scanner.Scan() {
+				payload := strings.TrimPrefix(scanner.Text(), "data: ")
+				if payload == "" || payload == "[DONE]" {
+					continue
+				}
+				var chunk llm.ChatCompletionChunk
+				require.NoError(t, json.Unmarshal([]byte(payload), &chunk))
+				if len(chunk.Choices) == 1 && chunk.Choices[0].FinishReason != nil {
+					got = *chunk.Choices[0].FinishReason
+				}
+			}
+			require.NoError(t, scanner.Err())
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestChatCompletions_RejectsTools(t *testing.T) {

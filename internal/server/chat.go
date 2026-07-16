@@ -52,7 +52,7 @@ func (h *handlers) chatBlocking(w http.ResponseWriter, r *http.Request, prompt s
 				Content:          resp.Text,
 				ReasoningContent: resp.Reasoning,
 			},
-			FinishReason: "stop",
+			FinishReason: finishReasonOrStop(resp.FinishReason),
 		}},
 		Usage: llm.CompletionUsage{
 			PromptTokens:     resp.Usage.InputTokens,
@@ -133,10 +133,10 @@ streamLoop:
 		return
 	}
 
-	stop := "stop"
+	finishReason := finishReasonOrStop(stream.FinishReason)
 	writeChunk(w, flusher, llm.ChatCompletionChunk{
 		ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
-		Choices: []llm.ChatChoiceDelta{{Index: 0, Delta: llm.ChatDelta{}, FinishReason: &stop}},
+		Choices: []llm.ChatChoiceDelta{{Index: 0, Delta: llm.ChatDelta{}, FinishReason: &finishReason}},
 	})
 	writeRaw(w, flusher, "[DONE]")
 }
@@ -159,4 +159,11 @@ func resolvedModel(actual, requested string) string {
 		return actual
 	}
 	return requested
+}
+
+func finishReasonOrStop(reason string) string {
+	if reason == "" {
+		return "stop"
+	}
+	return reason
 }
