@@ -41,10 +41,10 @@ each in order and falls back on error.
 ## Install / run
 
 ```bash
-make install      # build, seed config, link plist, bootstrap agent
-make reload       # rebuild + kickstart (full restart; needed for bind changes)
-make uninstall    # bootout + remove symlink (binary & config preserved)
-make logs         # tail /tmp/personal.smolllm-server.log
+just install      # build, seed config, link plist, bootstrap agent
+just reload       # rebuild + kickstart (full restart; needed for bind changes)
+just uninstall    # bootout + remove symlink (binary & config preserved)
+just logs         # tail /tmp/personal.smolllm-server.log
 ```
 
 ### Hot reload
@@ -55,7 +55,7 @@ via fsnotify). Hot-reloadable: `aliases`, `server.access_key`,
 so rotated provider keys take effect). Invalid YAML is rejected and the
 previous snapshot is retained.
 
-For `server.bind` changes, or to force a clean restart, run `make reload`.
+For `server.bind` changes, or to force a clean restart, run `just reload`.
 
 The agent runs at `0.0.0.0:11435` (all interfaces, LAN-accessible) and reads
 `~/.env.smolllm` itself on startup — no wrapper script.
@@ -120,9 +120,9 @@ and `/v1/completions` (legacy text completion). Requests using these get a 400.
 ## Development
 
 ```bash
-make test    # go test ./... -race
-make vet
-make build   # writes binary to ~/.local/bin/smolllm-server
+just test    # go test ./... -race
+just vet
+just build   # writes binary to ~/.local/bin/smolllm-server
 ```
 
 The chat handler test (`internal/server/chat_test.go`) spins up an

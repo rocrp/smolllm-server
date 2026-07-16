@@ -81,7 +81,7 @@ func run() error {
 
 	// Auto-reload on file change. For bind changes (or any change you want
 	// to force-apply immediately even if the file didn't move), use
-	// `make reload`, which restarts the process.
+	// `just reload`, which restarts the process.
 	go watchConfig(ctx, store, srv, levelVar, logger)
 
 	return srv.Run(ctx)
@@ -160,7 +160,7 @@ func doReload(store *config.Store, srv *server.Server, levelVar *slog.LevelVar, 
 		"log_level", newCfg.Server.LogLevel,
 	)
 	if newCfg.Server.Bind != srv.Bind() {
-		logger.Warn("server.bind changed but cannot hot-reload; run `make reload` to re-bind",
+		logger.Warn("server.bind changed but cannot hot-reload; run `just reload` to re-bind",
 			"current", srv.Bind(), "config", newCfg.Server.Bind)
 	}
 }
