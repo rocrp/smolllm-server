@@ -22,15 +22,18 @@ import (
 // via env vars, and returns an *httptest.Server hosting our smolllm-server
 // handlers. Caller closes both servers via t.Cleanup.
 //
-// `streaming` controls the response fixture shape.
-func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]any)) (*httptest.Server, *config.Config) {
+// `clientStreaming` selects fixture chunks for the client's blocking or
+// streaming response path. The fake upstream always returns SSE because
+// smolllm-go always streams upstream. Tests using this helper must remain
+// sequential because t.Setenv cannot be used from parallel tests.
+func newTestRig(t *testing.T, clientStreaming bool, inspectRequest ...func(map[string]any)) (*httptest.Server, *config.Config) {
 	t.Helper()
-	return newTestRigWithFinishReason(t, streaming, "stop", inspectRequest...)
+	return newTestRigWithFinishReason(t, clientStreaming, "stop", inspectRequest...)
 }
 
 func newTestRigWithFinishReason(
 	t *testing.T,
-	streaming bool,
+	clientStreaming bool,
 	providerFinishReason string,
 	inspectRequest ...func(map[string]any),
 ) (*httptest.Server, *config.Config) {
@@ -68,7 +71,7 @@ func newTestRigWithFinishReason(
 		flusher := w.(http.Flusher)
 
 		var frames []string
-		if !streaming {
+		if !clientStreaming {
 			// Single content chunk → reassembles to "42" via Ask.
 			frames = []string{
 				`{"id":"x","object":"chat.completion.chunk","model":"marvin-7b","choices":[{"index":0,"delta":{"role":"assistant","content":"42"}}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
