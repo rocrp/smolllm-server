@@ -22,7 +22,7 @@ import (
 // via env vars, and returns an *httptest.Server hosting our smolllm-server
 // handlers. Caller closes both servers via t.Cleanup.
 //
-// `streaming` controls whether the upstream returns SSE.
+// `streaming` controls the response fixture shape.
 func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]any)) (*httptest.Server, *config.Config) {
 	t.Helper()
 
@@ -36,7 +36,9 @@ func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		require.Equal(t, "marvin-7b", body["model"])
 		for _, inspect := range inspectRequest {
-			inspect(body)
+			if inspect != nil {
+				inspect(body)
+			}
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -86,7 +88,9 @@ func newTestRig(t *testing.T, streaming bool, inspectRequest ...func(map[string]
 }
 
 func TestChatCompletions_Blocking(t *testing.T) {
-	ts, _ := newTestRig(t, false)
+	ts, _ := newTestRig(t, false, func(body map[string]any) {
+		require.NotContains(t, body, "max_tokens")
+	})
 
 	body := `{"model":"fast","messages":[{"role":"user","content":"what is the answer?"}]}`
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
@@ -183,29 +187,8 @@ func TestChatCompletions_RejectsEmptyStopString(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-func TestChatCompletions_RejectsNonPositiveMaxTokens(t *testing.T) {
-	ts, _ := newTestRig(t, false)
-
-	body := `{"model":"fast","max_tokens":0,"messages":[{"role":"user","content":"hi"}]}`
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer rocry")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-	var env struct {
-		Error struct{ Message string } `json:"error"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
-	require.Contains(t, env.Error.Message, "max_tokens")
-}
-
 func TestChatCompletions_Streaming(t *testing.T) {
-	ts, _ := newTestRig(t, true)
+	ts, _ := newTestRig(t, true, nil)
 
 	body := `{"model":"fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
@@ -369,7 +352,7 @@ func TestStats_AggregatesUsageMeter(t *testing.T) {
 }
 
 func TestChatCompletions_RejectsTools(t *testing.T) {
-	ts, _ := newTestRig(t, false)
+	ts, _ := newTestRig(t, false, nil)
 
 	body := `{"model":"fast","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function"}]}`
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
@@ -389,7 +372,7 @@ func TestChatCompletions_RejectsTools(t *testing.T) {
 }
 
 func TestChatCompletions_AuthRequired(t *testing.T) {
-	ts, _ := newTestRig(t, false)
+	ts, _ := newTestRig(t, false, nil)
 
 	body := `{"model":"fast","messages":[{"role":"user","content":"hi"}]}`
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
@@ -402,7 +385,7 @@ func TestChatCompletions_AuthRequired(t *testing.T) {
 }
 
 func TestHealthz_NoAuth(t *testing.T) {
-	ts, _ := newTestRig(t, false)
+	ts, _ := newTestRig(t, false, nil)
 	resp, err := http.Get(ts.URL + "/healthz")
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -410,7 +393,7 @@ func TestHealthz_NoAuth(t *testing.T) {
 }
 
 func TestModels_ListsAliases(t *testing.T) {
-	ts, _ := newTestRig(t, false)
+	ts, _ := newTestRig(t, false, nil)
 	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer rocry")
 	resp, err := http.DefaultClient.Do(req)
@@ -424,4 +407,39 @@ func TestModels_ListsAliases(t *testing.T) {
 	require.Len(t, out.Data, 1)
 	require.Equal(t, "fast", out.Data[0].ID)
 	require.Equal(t, "smolllm-alias", out.Data[0].OwnedBy)
+}
+
+func TestChatCompletions_RejectsNonPositiveMaxTokens(t *testing.T) {
+	tests := []struct {
+		name      string
+		maxTokens int
+	}{
+		{name: "zero", maxTokens: 0},
+		{name: "negative", maxTokens: -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts, _ := newTestRig(t, false, nil)
+			body := fmt.Sprintf(`{"model":"fast","max_tokens":%d,"messages":[{"role":"user","content":"hi"}]}`, tt.maxTokens)
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer rocry")
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+			var env struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
+			require.Equal(t, "invalid_request_error", env.Error.Type)
+			require.Contains(t, env.Error.Message, "max_tokens must be positive")
+		})
+	}
 }
