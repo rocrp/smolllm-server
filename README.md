@@ -141,7 +141,7 @@ Live probe, 2026-08-27 (`~/.env.smolllm` credentials, both modes):
 | `deepseek/deepseek-v4-flash`, `groq/openai/gpt-oss-120b`, `omlx/Qwen3.8-27B-*`, `jake/glm` | honoured |
 | `gemini/gemini-3.5-flash-lite`, `gemini/gemini-flash-latest` | honoured (streams `finish_reason: stop`) |
 | `groq/groq/compound`, `groq/groq/compound-mini`, `ollama/frob/hy-mt1.5` | 400, chain advances |
-| `codeagentlayer/antigravity/*` | **silently ignored** — answers in prose |
+| `smolayer/antigravity/*` | **silently ignored** — answers in prose |
 
 ## Not yet supported
 

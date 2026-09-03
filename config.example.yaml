@@ -13,9 +13,9 @@ server:
 # Aliases map a logical name to a comma-separated provider/model fallback chain.
 # smolllm-go tries each entry in order and falls back on errors.
 aliases:
-  fast: cerebras/qwen-3-235b-a22b-instruct-2507,groq/qwen/qwen3-32b!none,gemini/gemini-3.1-flash-lite-preview,codeagentlayer/droid/gemini-3-flash-preview,gemini/gemini-flash-latest,codeagentlayer/antigravity/gemini-3-flash,gemini/gemini-flash-latest
+  fast: cerebras/qwen-3-235b-a22b-instruct-2507,groq/qwen/qwen3-32b!none,gemini/gemini-3.1-flash-lite-preview,smolayer/droid/gemini-3-flash-preview,gemini/gemini-flash-latest,smolayer/antigravity/gemini-3-flash,gemini/gemini-flash-latest
   translator: ollama/frob/hy-mt1.5:latest,gemini/gemini-flash-lite-latest
-  complex: codeagentlayer/droid/kimi-k2.6,codeagentlayer/antigravity/gemini-3.1-pro-high,codeagentlayer/antigravity/gemini-3.1-pro-low,codeagentlayer/droid/glm-5.1,codeagentlayer/droid/gemini-3.1-pro-preview,codeagentlayer/droid/claude-opus-4-7,codeagentlayer/droid/claude-sonnet-4-6,codeagentlayer/antigravity/gemini-3-flash,gemini/gemini-3-flash-preview,gemini/gemini-flash-latest,deepseek/deepseek-v4-flash
+  complex: smolayer/droid/kimi-k2.6,smolayer/antigravity/gemini-3.1-pro-high,smolayer/antigravity/gemini-3.1-pro-low,smolayer/droid/glm-5.1,smolayer/droid/gemini-3.1-pro-preview,smolayer/droid/claude-opus-4-7,smolayer/droid/claude-sonnet-4-6,smolayer/antigravity/gemini-3-flash,gemini/gemini-3-flash-preview,gemini/gemini-flash-latest,deepseek/deepseek-v4-flash
   vision: gemini/gemini-flash-latest
   # Tool calling: every leg here must honour `tools`. A leg that ignores them
   # answers in prose, which no agent loop can detect.
