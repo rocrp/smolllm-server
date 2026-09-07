@@ -229,6 +229,7 @@ func TestChatCompletions_Streaming(t *testing.T) {
 
 	var collected bytes.Buffer
 	var doneSeen bool
+	var chunks int
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -245,6 +246,13 @@ func TestChatCompletions_Streaming(t *testing.T) {
 		var chunk llm.ChatCompletionChunk
 		require.NoError(t, json.Unmarshal([]byte(payload), &chunk))
 		require.Len(t, chunk.Choices, 1)
+		// Clients take the served model from the first frame, so even the
+		// opening role frame must name the leg behind the alias, not the alias.
+		require.Equal(t, "mock/marvin-7b", chunk.Model, "chunk %d", chunks)
+		if chunks == 0 {
+			require.Equal(t, "assistant", chunk.Choices[0].Delta.Role, "the first frame carries the role")
+		}
+		chunks++
 		collected.WriteString(chunk.Choices[0].Delta.Content)
 	}
 	require.NoError(t, scanner.Err())

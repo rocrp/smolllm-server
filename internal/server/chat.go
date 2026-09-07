@@ -100,11 +100,10 @@ func (h *handlers) chatStream(
 		flusher: flusher,
 		id:      llm.NewID(),
 		created: time.Now().Unix(),
-		// No leg has been chosen yet, so the opening frames name what the client
-		// asked for; each event carries the served model once one wins.
+		// Replaced by the served model as soon as a leg wins; only a stream that
+		// fails before any leg answers ever names the alias the client asked for.
 		model: requestedModel,
 	}
-	frames.write(llm.ChatDelta{Role: "assistant"}, nil)
 
 	var slots toolCallSlots
 	for event := range stream.Events() {
@@ -167,15 +166,25 @@ func (h *handlers) streamFailure(frames *chunkWriter, msg *smolllm.AssistantMess
 
 // chunkWriter emits the SSE frames of one streamed completion, holding the
 // identity every frame repeats.
+//
+// The opening `role: assistant` frame is not written until the first real frame
+// is due. Clients read the served model off the first frame they receive, and
+// the leg that serves the turn is only known once it produces something; an
+// eager prelude would name the alias instead and be believed.
 type chunkWriter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
 	id      string
 	created int64
 	model   string
+	opened  bool
 }
 
 func (c *chunkWriter) write(delta llm.ChatDelta, finishReason *string, streamErr ...*llm.ChatStreamError) {
+	if !c.opened {
+		c.opened = true
+		c.write(llm.ChatDelta{Role: "assistant"}, nil)
+	}
 	chunk := llm.ChatCompletionChunk{
 		ID:      c.id,
 		Object:  "chat.completion.chunk",
