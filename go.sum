@@ -8,6 +8,8 @@ github.com/openai/openai-go/v3 v3.34.0 h1:YuFnPyHcclPOYR8dPHeoaCtanDS3pQZ/H0yczc
 github.com/openai/openai-go/v3 v3.34.0/go.mod h1:cdufnVK14cWcT9qA1rRtrXx4FTRsgbDPW7Ia7SS5cZo=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/rocry/smolllm-go v0.2.0 h1:MDP4YD8xgZnZL8+pDGpjbhvC/fxnbZdvHuJ/SO/Agy4=
+github.com/rocry/smolllm-go v0.2.0/go.mod h1:CUyilO9Ik5Mfo9h8vOSRMJbzPi38iJzw2vql2g3GU48=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
