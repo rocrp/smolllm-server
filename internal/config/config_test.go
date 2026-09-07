@@ -86,6 +86,37 @@ func TestLoad_InvalidAlias(t *testing.T) {
 	require.Contains(t, err.Error(), "empty entry")
 }
 
+// `!effort` is smolllm-server config syntax: the server parses it out of each
+// leg and hands smolllm-go a per-leg override, so a chain that mixes efforts
+// loads exactly as written.
+func TestLoad_AcceptsPerLegEffortSuffix(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path,
+		[]byte("server:\n  access_key: k\naliases:\n  fast: \"groq/qwen3-32b!low,gemini/flash,gemini/pro!none\"\n"), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "groq/qwen3-32b!low,gemini/flash,gemini/pro!none", cfg.ResolveModel("fast"),
+		"the alias keeps its suffixes; the adapter strips them per leg")
+}
+
+// smolllm-go keys per-leg overrides by spec, so one spec cannot run at two
+// efforts. Catching it at load beats discovering it as changed routing.
+func TestLoad_RejectsOneSpecWithTwoEfforts(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path,
+		[]byte("server:\n  access_key: k\naliases:\n  fast: \"gemini/pro!high,gemini/pro!low\"\n"), 0o600))
+
+	_, err := Load(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `alias "fast"`)
+	require.Contains(t, err.Error(), "two different efforts")
+}
+
 func TestEnvAccessKeyOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

@@ -11,6 +11,8 @@ import (
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
+
+	"github.com/rocry/smolllm-server/internal/modelspec"
 )
 
 const (
@@ -101,13 +103,8 @@ func (c *Config) Validate() error {
 		if strings.ContainsAny(name, " \t/,") {
 			return fmt.Errorf("alias name %q must not contain space, tab, slash, or comma", name)
 		}
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("alias %q has empty value", name)
-		}
-		for _, part := range strings.Split(value, ",") {
-			if strings.TrimSpace(part) == "" {
-				return fmt.Errorf("alias %q has empty entry in chain", name)
-			}
+		if err := modelspec.Validate(value); err != nil {
+			return fmt.Errorf("alias %q: %w", name, err)
 		}
 	}
 	return nil

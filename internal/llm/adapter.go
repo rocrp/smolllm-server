@@ -10,44 +10,54 @@ import (
 	"time"
 
 	"github.com/rocry/smolllm-go/smolllm"
+	"github.com/rocry/smolllm-server/internal/modelspec"
 )
 
-// BuildOptions converts an incoming ChatRequest into smolllm options.
-// `aliasResolve` should map an alias name to a comma-separated chain or return
-// the input unchanged if no alias applies (typically *config.Config.ResolveModel).
-func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.Prompt, []smolllm.Option, error) {
+// BuildOptions converts an incoming ChatRequest into a smolllm Request plus the
+// per-call options for it. `aliasResolve` maps an alias name to a comma-separated
+// chain, or returns its input unchanged when no alias applies (typically
+// *config.Config.ResolveModel).
+//
+// Routing and sampling live in the options; the conversation, and only the
+// conversation, lives in the Request.
+func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.Request, []smolllm.Option, error) {
+	var empty smolllm.Request
 	if req == nil {
-		return smolllm.Prompt{}, nil, errors.New("request must not be nil")
+		return empty, nil, errors.New("request must not be nil")
 	}
 	if strings.TrimSpace(req.Model) == "" {
-		return smolllm.Prompt{}, nil, errors.New("model is required")
+		return empty, nil, errors.New("model is required")
 	}
 	if len(req.Messages) == 0 {
-		return smolllm.Prompt{}, nil, errors.New("messages must not be empty")
+		return empty, nil, errors.New("messages must not be empty")
 	}
 
 	if !isJSONNullOrEmpty(req.Functions) {
-		return smolllm.Prompt{}, nil, errors.New(
+		return empty, nil, errors.New(
 			"functions are not supported by smolllm-server (the legacy API is superseded by tools)")
 	}
 	if req.N != nil && *req.N != 1 {
-		return smolllm.Prompt{}, nil, fmt.Errorf("n=%d is not supported (only n=1)", *req.N)
+		return empty, nil, fmt.Errorf("n=%d is not supported (only n=1)", *req.N)
 	}
 
 	model := req.Model
 	if aliasResolve != nil {
 		model = aliasResolve(model)
 	}
-
-	prompt := smolllm.PromptFromMessages(req.Messages)
-	if err := restoreToolCallExtras(prompt.Messages, req.rawMessages); err != nil {
-		return smolllm.Prompt{}, nil, err
-	}
-	if err := prompt.Validate(); err != nil {
-		return smolllm.Prompt{}, nil, err
+	routing, err := ModelOptions(model)
+	if err != nil {
+		return empty, nil, err
 	}
 
-	opts := []smolllm.Option{smolllm.WithModel(model)}
+	turn := smolllm.RequestFromMessages(req.Messages)
+	if err := restoreToolCallExtras(turn.Messages, req.rawMessages); err != nil {
+		return empty, nil, err
+	}
+	if err := turn.Validate(); err != nil {
+		return empty, nil, err
+	}
+
+	opts := routing
 	if req.Temperature != nil {
 		opts = append(opts, smolllm.WithTemperature(*req.Temperature))
 	}
@@ -56,35 +66,63 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.P
 	}
 	if req.MaxTokens != nil {
 		if *req.MaxTokens <= 0 {
-			return smolllm.Prompt{}, nil, fmt.Errorf("max_tokens must be positive (got %d)", *req.MaxTokens)
+			return empty, nil, fmt.Errorf("max_tokens must be positive (got %d)", *req.MaxTokens)
 		}
 		opts = append(opts, smolllm.WithMaxTokens(*req.MaxTokens))
 	}
 	if !isJSONNullOrEmpty(req.Stop) {
 		stops, err := decodeStop(req.Stop)
 		if err != nil {
-			return smolllm.Prompt{}, nil, err
+			return empty, nil, err
 		}
 		opts = append(opts, smolllm.WithStop(stops...))
 	}
 	if req.Seed != nil {
 		opts = append(opts, smolllm.WithSeed(*req.Seed))
 	}
+	// The request field sets the effort for the chain as a whole. A leg that named
+	// its own in the config keeps it: smolllm-go reads the per-leg override first
+	// and falls back to this one, so the two never depend on option order.
 	if req.ReasoningEffort != nil && strings.TrimSpace(*req.ReasoningEffort) != "" {
 		opts = append(opts, smolllm.WithReasoningEffort(*req.ReasoningEffort))
 	}
 	// Pass-through fields reach the provider verbatim; the server models none of
-	// them, so a provider error about one surfaces unchanged.
+	// them, so a provider error about one surfaces unchanged. `tools` stays here
+	// rather than moving to the typed Request.Tools, which models only name,
+	// description and parameters and would drop every other key a caller sent.
 	if extra := passThroughFields(req); len(extra) > 0 {
 		opts = append(opts, smolllm.WithExtraBody(extra))
 	}
 	if req.Timeout != nil {
 		if *req.Timeout < 0 {
-			return smolllm.Prompt{}, nil, fmt.Errorf("timeout must be >= 0 (got %g)", *req.Timeout)
+			return empty, nil, fmt.Errorf("timeout must be >= 0 (got %g)", *req.Timeout)
 		}
+		// Since v0.3 this bounds the whole call - every fallback leg, every retry
+		// and the consumption of the stream - not one upstream request.
 		opts = append(opts, smolllm.WithTimeout(time.Duration(*req.Timeout*float64(time.Second))))
 	}
-	return prompt, opts, nil
+	return turn, opts, nil
+}
+
+// ModelOptions turns a resolved model chain into the routing options for it:
+// WithModel over the bare specs, plus one per-leg reasoning-effort override for
+// each leg whose config entry carried an `!effort` suffix.
+//
+// The suffix is smolllm-server config syntax. smolllm-go dropped it in v0.3, so
+// it never reaches the library as part of a model string.
+func ModelOptions(model string) ([]smolllm.Option, error) {
+	chain, err := modelspec.Parse(model)
+	if err != nil {
+		return nil, err
+	}
+	opts := make([]smolllm.Option, 0, len(chain.Legs)+1)
+	opts = append(opts, smolllm.WithModel(chain.Model()))
+	for _, leg := range chain.Legs {
+		if leg.Effort != "" {
+			opts = append(opts, smolllm.WithLegReasoningEffort(leg.Spec, leg.Effort))
+		}
+	}
+	return opts, nil
 }
 
 // restoreToolCallExtras puts back the tool-call keys the openai param union drops

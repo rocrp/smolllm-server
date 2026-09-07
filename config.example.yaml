@@ -12,10 +12,29 @@ server:
 
 # Aliases map a logical name to a comma-separated provider/model fallback chain.
 # smolllm-go tries each entry in order and falls back on errors.
+#
+# Each leg may carry `!effort` to set its own reasoning budget:
+#
+#   fast: groq/openai/gpt-oss-120b!low,gemini/gemini-flash-latest!none,deepseek/deepseek-v4-flash
+#          ^ this leg runs at "low"   ^ this one at "none"           ^ this one takes whatever
+#                                                                      the request asked for
+#
+# `!effort` is smolllm-server CONFIG SYNTAX, not smolllm-go's. The library
+# dropped the suffix in v0.3 so a wire model name can contain any punctuation;
+# the server parses it out per leg and passes it as a per-leg override, so the
+# suffix never reaches the provider. Everything after the first "/" and before
+# the "!" is the wire model name, sent verbatim.
+#
+# Precedence: a leg's own `!effort` wins for that leg. Legs without one use the
+# request's `reasoning_effort` field, which applies to the chain as a whole.
+#
+# One spec may not carry two different efforts in the same chain (the override is
+# keyed by spec), and the value still has to be one the leg's provider accepts —
+# gpt-oss rejects `none`, so it takes `!low` instead.
 aliases:
-  fast: cerebras/qwen-3-235b-a22b-instruct-2507,groq/qwen/qwen3-32b!none,gemini/gemini-3.1-flash-lite-preview,smolayer/antigravity/gemini-3-flash,gemini/gemini-flash-latest,smolayer/antigravity/gemini-3-flash,gemini/gemini-flash-latest
+  fast: cerebras/qwen-3-235b-a22b-instruct-2507,groq/qwen/qwen3-32b!none,gemini/gemini-3.1-flash-lite-preview,smolayer/antigravity/gemini-3-flash,gemini/gemini-flash-latest
   translator: ollama/frob/hy-mt1.5:latest,gemini/gemini-flash-lite-latest
-  complex: smolayer/codex/gpt-5.6-sol!high,smolayer/antigravity/gemini-3.1-pro!high,smolayer/antigravity/gemini-3.1-pro!low,smolayer/codex/gpt-5.4,smolayer/antigravity/gemini-3-flash,gemini/gemini-3-flash-preview,gemini/gemini-flash-latest,deepseek/deepseek-v4-flash
+  complex: smolayer/codex/gpt-5.6-sol!high,smolayer/antigravity/gemini-3.1-pro!high,smolayer/codex/gpt-5.4,smolayer/antigravity/gemini-3-flash,gemini/gemini-3-flash-preview,gemini/gemini-flash-latest,deepseek/deepseek-v4-flash
   vision: gemini/gemini-flash-latest
   # Tool calling: every leg here must honour `tools`. A leg that ignores them
   # answers in prose, which no agent loop can detect.

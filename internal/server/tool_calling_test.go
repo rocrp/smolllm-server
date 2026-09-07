@@ -101,7 +101,7 @@ func TestChatCompletions_BlockingReturnsToolCalls(t *testing.T) {
 	require.JSONEq(t, `{"google":{"thought_signature":"sig-abc"}}`, string(call.Extra["extra_content"]))
 }
 
-func TestChatCompletions_StreamingEmitsAssembledToolCalls(t *testing.T) {
+func TestChatCompletions_StreamingEmitsToolCallFragments(t *testing.T) {
 	ts := newToolCallRig(t, "stop", nil)
 
 	resp := postChat(t, ts,
@@ -109,10 +109,21 @@ func TestChatCompletions_StreamingEmitsAssembledToolCalls(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
+	// Each frame carrying tool calls, decoded loosely: only the opening frame
+	// sets id, type and name, so a typed struct would hide which frame did what.
+	type rawFrame struct {
+		Choices []struct {
+			Delta struct {
+				ToolCalls []map[string]any `json:"tool_calls"`
+			} `json:"delta"`
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+
 	var (
-		frames       []llm.ChatCompletionChunk
-		rawToolFrame string
-		doneSeen     bool
+		toolFrames []map[string]any
+		lastFrame  rawFrame
+		doneSeen   bool
 	)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -125,42 +136,47 @@ func TestChatCompletions_StreamingEmitsAssembledToolCalls(t *testing.T) {
 			doneSeen = true
 			break
 		}
-		var chunk llm.ChatCompletionChunk
-		require.NoError(t, json.Unmarshal([]byte(payload), &chunk))
-		// Select on the parsed delta, not on the text: the terminal frame now
-		// carries "tool_calls" as its finish reason.
-		if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-			rawToolFrame = payload
-		}
-		frames = append(frames, chunk)
+		var frame rawFrame
+		require.NoError(t, json.Unmarshal([]byte(payload), &frame))
+		require.Len(t, frame.Choices, 1)
+		toolFrames = append(toolFrames, frame.Choices[0].Delta.ToolCalls...)
+		lastFrame = frame
 	}
 	require.NoError(t, scanner.Err())
 	require.True(t, doneSeen)
-	require.NotEmpty(t, rawToolFrame, "one frame must carry the assembled tool calls")
 
-	// Emitted as OpenAI clients expect: index alongside the call's own fields.
-	var toolFrame struct {
-		Choices []struct {
-			Delta struct {
-				ToolCalls []map[string]any `json:"tool_calls"`
-			} `json:"delta"`
-		} `json:"choices"`
+	// The upstream fragments its arguments across two frames, so the client sees
+	// the same shape a provider would send: a header frame, then argument text.
+	require.Len(t, toolFrames, 3)
+
+	header := toolFrames[0]
+	require.Equal(t, float64(0), header["index"])
+	require.Equal(t, "call_1", header["id"])
+	require.Equal(t, "function", header["type"])
+	require.Contains(t, header, "extra_content",
+		"Gemini expects its thought signature echoed back on the next turn")
+	require.Equal(t,
+		map[string]any{"name": "get_weather", "arguments": ""},
+		header["function"])
+
+	var arguments strings.Builder
+	for _, frame := range toolFrames[1:] {
+		require.Equal(t, float64(0), frame["index"])
+		require.NotContains(t, frame, "id", "only the opening frame identifies the call")
+		function, ok := frame["function"].(map[string]any)
+		require.True(t, ok)
+		text, ok := function["arguments"].(string)
+		require.True(t, ok)
+		arguments.WriteString(text)
 	}
-	require.NoError(t, json.Unmarshal([]byte(rawToolFrame), &toolFrame))
-	require.Len(t, toolFrame.Choices[0].Delta.ToolCalls, 1)
-	call := toolFrame.Choices[0].Delta.ToolCalls[0]
-	require.Equal(t, float64(0), call["index"])
-	require.Equal(t, "call_1", call["id"])
-	require.Equal(t, "function", call["type"])
-	require.Contains(t, call, "extra_content")
+	require.JSONEq(t, `{"city":"Paris"}`, arguments.String())
 
-	// The tool frame precedes the terminal frame, which reports the provider's
-	// verbatim reason - Gemini says "stop" while returning tool calls.
-	last := frames[len(frames)-1]
-	require.NotNil(t, last.Choices[0].FinishReason)
-	require.Equal(t, "tool_calls", *last.Choices[0].FinishReason,
-		"Gemini streams \"stop\" with tool calls; agent loops branch on this field")
-	require.Empty(t, last.Choices[0].Delta.ToolCalls)
+	// The terminal frame reports the OpenAI-shaped reason and carries no call of
+	// its own - Gemini says "stop" while returning tool calls.
+	require.NotNil(t, lastFrame.Choices[0].FinishReason)
+	require.Equal(t, "tool_calls", *lastFrame.Choices[0].FinishReason,
+		"agent loops branch on this field")
+	require.Empty(t, lastFrame.Choices[0].Delta.ToolCalls)
 }
 
 func TestChatCompletions_ReplaysToolConversationUpstream(t *testing.T) {

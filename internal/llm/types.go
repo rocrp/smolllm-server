@@ -92,10 +92,44 @@ type ChatMessage struct {
 	ToolCalls        []smolllm.ToolCall `json:"tool_calls,omitempty"`
 }
 
+// CompletionUsage is the OpenAI usage block. smolllm-go reports Input with the
+// cached tokens taken out, so PromptTokens adds them back: OpenAI clients read
+// prompt_tokens as everything the prompt cost, cached or not, and report the
+// cached share separately under the details.
 type CompletionUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int                      `json:"prompt_tokens"`
+	CompletionTokens        int                      `json:"completion_tokens"`
+	TotalTokens             int                      `json:"total_tokens"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+type CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
+// UsageFrom converts a smolllm Usage into the OpenAI block. The details appear
+// only when the provider reported them, so a provider that meters neither cache
+// reads nor reasoning produces the same three fields it always did.
+func UsageFrom(usage smolllm.Usage) CompletionUsage {
+	out := CompletionUsage{
+		PromptTokens:            usage.Input + usage.CacheRead,
+		CompletionTokens:        usage.Output,
+		TotalTokens:             usage.Total,
+		PromptTokensDetails:     nil,
+		CompletionTokensDetails: nil,
+	}
+	if usage.CacheRead > 0 {
+		out.PromptTokensDetails = &PromptTokensDetails{CachedTokens: usage.CacheRead}
+	}
+	if usage.Reasoning > 0 {
+		out.CompletionTokensDetails = &CompletionTokensDetails{ReasoningTokens: usage.Reasoning}
+	}
+	return out
 }
 
 // ChatCompletionChunk is a single SSE frame for streaming chat.
@@ -123,36 +157,75 @@ type ChatDelta struct {
 	Role             string `json:"role,omitempty"`
 	Content          string `json:"content,omitempty"`
 	ReasoningContent string `json:"reasoning_content,omitempty"`
-	// ToolCalls arrive in one frame at stream end: smolllm-go exposes complete
-	// calls only, so there is nothing to emit before then.
-	ToolCalls []DeltaToolCall `json:"tool_calls,omitempty"`
+	// ToolCalls stream as they arrive: one frame opens the slot with its id and
+	// function name, later frames carry argument text only.
+	ToolCalls []ToolCallDelta `json:"tool_calls,omitempty"`
 }
 
-// DeltaToolCall is one assembled tool call in a streamed delta. The index is the
-// call's position, which OpenAI clients use to reassemble.
-type DeltaToolCall struct {
-	Index int
-	Call  smolllm.ToolCall
+// ToolCallDelta is one streamed fragment of a tool call, in the shape OpenAI
+// clients reassemble: Index identifies the slot, and every other field is
+// present only in the frames that carry it.
+type ToolCallDelta struct {
+	Index    int                    `json:"index"`
+	ID       string                 `json:"id,omitempty"`
+	Type     string                 `json:"type,omitempty"`
+	Function *ToolCallFunctionDelta `json:"function,omitempty"`
+	// Extra carries the provider keys smolllm-go preserved on the call, e.g.
+	// Gemini's thought signature, which the provider expects echoed back.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// MarshalJSON writes the call's own fields with `index` alongside them.
-func (d DeltaToolCall) MarshalJSON() ([]byte, error) {
-	encoded, err := json.Marshal(d.Call)
+// ToolCallFunctionDelta names the function and carries whatever argument text
+// this frame contributed. Arguments is always written, empty included, because
+// clients open their own accumulator on the frame that first sets it.
+type ToolCallFunctionDelta struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments"`
+}
+
+// OpenToolCall builds the frame that opens a tool-call slot, carrying everything
+// about the call except its arguments.
+func OpenToolCall(index int, call smolllm.ToolCall) ToolCallDelta {
+	return ToolCallDelta{
+		Index:    index,
+		ID:       call.ID,
+		Type:     call.Type,
+		Function: &ToolCallFunctionDelta{Name: call.Function.Name, Arguments: ""},
+		Extra:    call.Extra,
+	}
+}
+
+// AppendToolCallArguments builds the frame that adds argument text to an open slot.
+func AppendToolCallArguments(index int, arguments string) ToolCallDelta {
+	return ToolCallDelta{
+		Index:    index,
+		ID:       "",
+		Type:     "",
+		Function: &ToolCallFunctionDelta{Name: "", Arguments: arguments},
+		Extra:    nil,
+	}
+}
+
+// MarshalJSON writes the modelled fields plus any preserved provider extras.
+func (d ToolCallDelta) MarshalJSON() ([]byte, error) {
+	type plain ToolCallDelta // avoid recursing into this method
+	encoded, err := json.Marshal(plain(d))
 	if err != nil {
-		return nil, fmt.Errorf("encode tool call: %w", err)
+		return nil, fmt.Errorf("encode tool call delta: %w", err)
+	}
+	if len(d.Extra) == 0 {
+		return encoded, nil
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return nil, fmt.Errorf("encode tool call index: %w", err)
+		return nil, fmt.Errorf("encode tool call delta extras: %w", err)
 	}
-	index, err := json.Marshal(d.Index)
-	if err != nil {
-		return nil, fmt.Errorf("encode tool call index: %w", err)
+	for key, value := range d.Extra {
+		fields[key] = value
 	}
-	fields["index"] = index
 	out, err := json.Marshal(fields)
 	if err != nil {
-		return nil, fmt.Errorf("encode tool call index: %w", err)
+		return nil, fmt.Errorf("encode tool call delta extras: %w", err)
 	}
 	return out, nil
 }

@@ -6,17 +6,24 @@ across 41 providers via short alias names, runs locally on macOS under launchd.
 ## Layout
 
 ```
-cmd/server/        entrypoint
-internal/config/   YAML loader, env-file loader, alias resolution
-internal/auth/     bearer token middleware
-internal/llm/      OpenAI ↔ smolllm adapter (request build + response shapes)
-internal/server/   HTTP wiring: chat / embeddings / models / health
-internal/apierr/   OpenAI-style error envelope
-launch/            LaunchAgent plist + install/reload/uninstall script
+cmd/server/         entrypoint
+internal/config/    YAML loader, env-file loader, alias resolution
+internal/auth/      bearer token middleware
+internal/llm/       OpenAI ↔ smolllm adapter (request build + response shapes + failure mapping)
+internal/modelspec/ fallback-chain grammar incl. the `!effort` suffix, shared by config and adapter
+internal/server/    HTTP wiring: chat / embeddings / models / health
+internal/apierr/    OpenAI-style error envelope
+launch/             LaunchAgent plist + install/reload/uninstall script
 ```
 
-`go.mod` uses `replace github.com/rocry/smolllm-go => ../smolllm-go`, so local
-edits to the library propagate without publishing.
+`go.mod` carries `replace github.com/rocry/smolllm-go => ../smolllm-go` while
+`WithLegReasoningEffort` is unreleased; it becomes a `v0.3.2` pin once that is
+tagged.
+
+One `smolllm.Client` is built at startup and shared by every request: it owns the
+API-key and endpoint balancer, so a per-request client would restart key rotation
+on every call. Credentials still resolve per leg at call time, so hot-reloading
+the env file reaches it without a restart.
 
 ## Configuration
 
@@ -37,6 +44,45 @@ aliases:
 
 Aliases pass straight through to smolllm-go's `WithModel("a,b,c")`, which tries
 each in order and falls back on error.
+
+### Per-leg reasoning effort
+
+Each leg of a chain may carry `!effort`:
+
+```yaml
+fast: groq/openai/gpt-oss-120b!low,gemini/gemini-flash-latest!none,deepseek/deepseek-v4-flash
+```
+
+`!effort` is **smolllm-server config syntax, not smolllm-go's.** The library
+dropped the suffix in v0.3 so a wire model name could contain any punctuation.
+The server keeps it because a fallback chain wants a different reasoning budget
+per leg, which the library's chain-wide setting cannot express. `internal/modelspec`
+parses each leg into a spec and an optional effort, and the adapter hands
+smolllm-go the bare specs plus one `WithLegReasoningEffort(spec, effort)` per
+suffixed leg. The suffix never reaches a provider, and everything after the first
+`/` and before the `!` is the wire model name, sent verbatim.
+
+**Precedence.** A leg's own `!effort` wins for that leg. Legs without one use the
+request's `reasoning_effort` field, which applies to the chain as a whole. The
+two live in different library fields, so the outcome never depends on the order
+the options were applied.
+
+```
+config:  fast: mock/alpha!none,mock/beta
+request: {"model": "fast", "reasoning_effort": "high"}
+         → alpha runs at "none"   (its own suffix wins)
+         → beta  runs at "high"   (no suffix, so the request's value applies)
+```
+
+Two constraints:
+
+- **One spec, one effort per chain.** The override is keyed by model spec, so
+  `gemini/pro!high,gemini/pro!low` is rejected at config load rather than
+  silently collapsed to whichever came last.
+- **The provider still has to accept the value.** smolllm-go allows `none`,
+  `minimal`, `low`, `medium`, `high` and `xhigh` (Ollama takes a narrower set),
+  and a leg whose provider rejects its effort fails so the chain advances.
+  `gpt-oss` rejects `none`, for instance, so it takes `!low`.
 
 ## Install / run
 
@@ -65,7 +111,7 @@ The agent runs at `0.0.0.0:11435` (all interfaces, LAN-accessible) and reads
 | | |
 |---|---|
 | `GET /healthz`           | Public liveness probe. |
-| `GET /stats`             | In-memory per-attempt token usage for the last ~31 UTC days. Auth required. |
+| `GET /stats`             | In-memory per-attempt token usage for the last ~31 UTC days, bucketed by day × requested alias × served provider/model. Columns follow smolllm-go's usage: `input_tokens` excludes `cache_read_tokens`, and `output_tokens` includes `reasoning_tokens`. Auth required. |
 | `GET /v1/models`         | Lists configured aliases. Auth required. |
 | `POST /v1/chat/completions` | OpenAI Chat Completions. Auth required. Streaming via `stream: true`. |
 | `POST /v1/embeddings`    | OpenAI Embeddings. Auth required. |
@@ -119,9 +165,12 @@ pass-through fields: forwarded to the provider verbatim, never modeled here, so
 a provider error about one surfaces unchanged. Assistant messages carrying
 `tool_calls` and `tool` role messages replay as sent.
 
-Streaming emits the assembled `tool_calls` in one delta frame just before the
-terminal frame — the library exposes complete calls only, so partial argument
-JSON never reaches a client. Mainstream OpenAI clients reassemble it fine.
+Streaming forwards tool calls fragment by fragment, the way OpenAI does: one
+frame opens the slot with its `index`, `id`, `type` and function name, and later
+frames carry argument text only. smolllm-go v0.3 streams those fragments rather
+than withholding complete calls until the end, so an agent loop can render
+arguments as they arrive. Any provider keys on the call (Gemini's thought
+signature, say) ride along on the opening frame and replay losslessly.
 
 Two things worth knowing before pointing an agent at an alias:
 
@@ -148,6 +197,44 @@ Live probe, 2026-08-27 (`~/.env.smolllm` credentials, both modes):
 `functions` (the legacy function-calling API, superseded by `tools`), `n>1`,
 and `/v1/completions` (legacy text completion). Requests using these get a 400.
 
+## Errors and timeouts
+
+smolllm-go v0.3 never reports an operational failure as a Go error: a call comes
+back with a stop reason and a message naming **every** failed leg. It also
+classifies each failure, and that classification picks the status:
+
+| what happened | status |
+|---|---|
+| a leg rejected the request shape (400, 413, 422) and aborted the chain | the upstream's own status, `invalid_request_error` |
+| every leg advanced and the chain ran out (401, 403, 404, 429, connection, EOF) | 502 `api_error` |
+| the whole-call budget expired | 504 `api_error` |
+| the client hung up mid-call | 499 |
+| nothing was attempted (unusable request, empty chain) | 400 `invalid_request_error` |
+
+The error message names every candidate that failed, not just the last one, so a
+chain that dies everywhere says so.
+
+A streamed call has already sent its status line by the time a failure lands, so
+it reports one as a terminal frame carrying `finish_reason: "error"` plus an
+`error` object, followed by `[DONE]`.
+
+One caveat when a leg fails **after** it has already emitted output: the library
+discards that leg's partial turn and starts the next candidate from scratch, but
+bytes already on the wire cannot be recalled, so the client sees the abandoned
+text (or tool-call fragments) followed by the winning leg's own. The server logs
+`stream leg failed after partial output` when this happens. Most legs fail on
+their first byte, where nothing has been sent yet.
+
+The optional `timeout` request field (seconds) now bounds the **whole call** —
+every fallback leg, every retry, the backoff waits between them, and the
+consumption of the stream — not one upstream request. Omit it for the library
+default of 600s; `0` disables the bound and leaves only the request context.
+
+Usage follows the OpenAI shape: `prompt_tokens` counts the whole prompt, cached
+or not, with the cached share repeated under `prompt_tokens_details.cached_tokens`
+and reasoning tokens under `completion_tokens_details.reasoning_tokens`. The
+details appear only when a provider reported them.
+
 ## Development
 
 ```bash
@@ -156,7 +243,9 @@ just vet
 just build   # writes binary to ~/.local/bin/smolllm-server
 ```
 
-The chat handler test (`internal/server/chat_test.go`) spins up an
-`httptest.Server` posing as an OpenAI-style provider, points smolllm-go at it
-via `MOCK_BASE_URL` / `MOCK_API_KEY`, and exercises both streaming and
-non-streaming end-to-end without touching the network.
+The chat handler tests (`internal/server/chat_test.go`,
+`internal/server/tool_calling_test.go`, `internal/server/failure_test.go`) spin
+up an `httptest.Server` posing as an OpenAI-style provider, point smolllm-go at
+it via `MOCK_BASE_URL` / `MOCK_API_KEY`, and exercise streaming, non-streaming,
+tool calling and every failure-to-status mapping end-to-end without touching the
+network.

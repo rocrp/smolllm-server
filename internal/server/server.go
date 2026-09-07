@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rocry/smolllm-go/smolllm"
 	"github.com/rocry/smolllm-server/internal/auth"
 	"github.com/rocry/smolllm-server/internal/config"
 	"github.com/rocry/smolllm-server/internal/ledger"
@@ -28,7 +29,16 @@ func New(store *config.Store, logger *slog.Logger) *Server {
 	cfg := store.Get()
 
 	mux := http.NewServeMux()
-	h := &handlers{store: store, logger: logger, ledger: ledger.New()}
+	// One client for the whole process. It owns the key/endpoint balancer, and
+	// resolves credentials per leg at call time, so hot-reloading the env file
+	// still reaches it. Everything that varies per request - the model chain, the
+	// sampling knobs, the ledger hook - is a per-call option.
+	h := &handlers{
+		store:  store,
+		logger: logger,
+		ledger: ledger.New(),
+		client: smolllm.New(smolllm.WithLogger(logger)),
+	}
 
 	// Public routes (no auth)
 	mux.HandleFunc("GET /healthz", h.health)

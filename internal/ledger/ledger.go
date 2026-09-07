@@ -12,7 +12,9 @@ import (
 const retention = 31 * 24 * time.Hour
 
 // Bucket aggregates attempts sharing a UTC day, requested alias, and served
-// provider/model.
+// provider/model. The token columns follow smolllm-go's Usage: InputTokens
+// EXCLUDES cache reads, which are counted on their own, and OutputTokens
+// INCLUDES the reasoning tokens reported beside it.
 type Bucket struct {
 	Day               string `json:"day"`
 	Alias             string `json:"alias"`
@@ -21,7 +23,9 @@ type Bucket struct {
 	Requests          int    `json:"requests"`
 	Failures          int    `json:"failures"`
 	InputTokens       int    `json:"input_tokens"`
+	CacheReadTokens   int    `json:"cache_read_tokens"`
 	OutputTokens      int    `json:"output_tokens"`
+	ReasoningTokens   int    `json:"reasoning_tokens"`
 	EstimatedRequests int    `json:"estimated_requests"`
 }
 
@@ -43,24 +47,30 @@ func New() *Ledger {
 	return &Ledger{buckets: make(map[bucketKey]Bucket)}
 }
 
-// Hook returns a request hook bound to the alias or raw model requested by the
-// client.
-func (l *Ledger) Hook(alias string) func(smolllm.RequestEvent) {
-	return func(event smolllm.RequestEvent) {
-		l.Record(alias, event)
+// Hook returns a smolllm-go request hook bound to the alias or raw model string
+// the client asked for. It fires once per attempt, successful or not.
+func (l *Ledger) Hook(alias string) func(smolllm.Attempt) {
+	return func(attempt smolllm.Attempt) {
+		l.Record(alias, attempt)
 	}
 }
 
-// Record adds one library request event to its stats bucket.
-func (l *Ledger) Record(alias string, event smolllm.RequestEvent) {
+// Record adds one attempt to its stats bucket, dated now. smolllm-go stopped
+// timestamping attempts in v0.3, and the hook fires as each leg finishes, so the
+// moment of recording is the moment the attempt ended.
+func (l *Ledger) Record(alias string, attempt smolllm.Attempt) {
+	l.recordAt(time.Now().UTC(), alias, attempt)
+}
+
+func (l *Ledger) recordAt(at time.Time, alias string, attempt smolllm.Attempt) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	key := bucketKey{
-		day:      event.Timestamp.UTC().Format(time.DateOnly),
+		day:      at.UTC().Format(time.DateOnly),
 		alias:    alias,
-		provider: event.Provider,
-		model:    event.ModelName,
+		provider: attempt.Provider,
+		model:    attempt.ModelName,
 	}
 	bucket := l.buckets[key]
 	bucket.Day = key.day
@@ -68,12 +78,14 @@ func (l *Ledger) Record(alias string, event smolllm.RequestEvent) {
 	bucket.Provider = key.provider
 	bucket.Model = key.model
 	bucket.Requests++
-	if event.Error != nil {
+	if attempt.Failed() {
 		bucket.Failures++
 	}
-	bucket.InputTokens += event.InputTokens
-	bucket.OutputTokens += event.OutputTokens
-	if event.Estimated {
+	bucket.InputTokens += attempt.Usage.Input
+	bucket.CacheReadTokens += attempt.Usage.CacheRead
+	bucket.OutputTokens += attempt.Usage.Output
+	bucket.ReasoningTokens += attempt.Usage.Reasoning
+	if attempt.Usage.Estimated {
 		bucket.EstimatedRequests++
 	}
 	l.buckets[key] = bucket

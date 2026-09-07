@@ -27,18 +27,21 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	model := h.cfg().ResolveModel(req.Model)
-	opts := []smolllm.Option{
-		smolllm.WithModel(model),
-		smolllm.WithLogger(h.logger),
-		smolllm.WithHook(h.ledger.Hook(req.Model)),
+	opts, err := llm.ModelOptions(model)
+	if err != nil {
+		badRequest(w, err.Error())
+		return
 	}
+	opts = append(opts, smolllm.WithHook(h.ledger.Hook(req.Model)))
 	if req.Dimensions != nil && *req.Dimensions > 0 {
 		opts = append(opts, smolllm.WithDimensions(*req.Dimensions))
 	}
 
-	resp, err := smolllm.Embed(r.Context(), inputs, opts...)
-	if err != nil {
-		upstreamError(w, err)
+	// Embed still reports failure as a Go error: it is not a streaming surface,
+	// so the never-throw contract does not apply to it.
+	resp, embedErr := h.client.Embed(r.Context(), inputs, opts...)
+	if embedErr != nil {
+		upstreamError(w, embedErr)
 		return
 	}
 
@@ -47,8 +50,8 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 		Data:   make([]llm.EmbeddingItem, len(resp.Embeddings)),
 		Model:  resolvedModel(resp.Model, req.Model),
 		Usage: llm.EmbeddingUsage{
-			PromptTokens: resp.Usage.InputTokens,
-			TotalTokens:  resp.Usage.InputTokens,
+			PromptTokens: resp.Usage.Input + resp.Usage.CacheRead,
+			TotalTokens:  resp.Usage.Total,
 		},
 	}
 	for i, vec := range resp.Embeddings {
