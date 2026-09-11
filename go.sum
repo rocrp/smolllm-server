@@ -8,8 +8,8 @@ github.com/openai/openai-go/v3 v3.56.0 h1:Xb+gsS7Gsb5dx+Uat9BHTWhifAOvQjU+pQNWT/
 github.com/openai/openai-go/v3 v3.56.0/go.mod h1:ufI1+K+t0ijRB3gk8eztiw1crcDpsBuxRQL4sbLIrts=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/rocry/smolllm-go v0.3.2 h1:bxppR8NqD2/v1XXRyKwM7tqYLW2JegTv0D7xSkfNoUo=
-github.com/rocry/smolllm-go v0.3.2/go.mod h1:z1jZ6uxEdN0L8IJnarcridpKxAw5lnAotdYiYvMCjtY=
+github.com/rocry/smolllm-go v0.3.4 h1:8t3H9REk3VI8lU4cxwONOZ7e7VmixxlkhT8WTIUBjfM=
+github.com/rocry/smolllm-go v0.3.4/go.mod h1:z1jZ6uxEdN0L8IJnarcridpKxAw5lnAotdYiYvMCjtY=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=

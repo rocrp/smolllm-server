@@ -82,16 +82,16 @@ func TestFailureForMapsStopReasonToStatus(t *testing.T) {
 			wantKind:   "invalid_request_error",
 		},
 		{
-			name: "payload too large aborts",
+			name: "payload too large exhausts the chain",
 			msg: &smolllm.AssistantMessage{
 				StopReason: smolllm.StopReasonError,
 				Attempts: []smolllm.Attempt{
-					failedAttempt(http.StatusRequestEntityTooLarge, smolllm.DispositionAbort,
+					failedAttempt(http.StatusRequestEntityTooLarge, smolllm.DispositionAdvance,
 						&smolllm.HTTPError{StatusCode: http.StatusRequestEntityTooLarge, Body: "too big"}),
 				},
 			},
-			wantStatus: http.StatusRequestEntityTooLarge,
-			wantKind:   "invalid_request_error",
+			wantStatus: http.StatusBadGateway,
+			wantKind:   "api_error",
 		},
 		{
 			// 401 is leg-local: the chain advanced and ran out of candidates, so

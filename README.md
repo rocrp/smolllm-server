@@ -205,8 +205,8 @@ classifies each failure, and that classification picks the status:
 
 | what happened | status |
 |---|---|
-| a leg rejected the request shape (400, 413, 422) and aborted the chain | the upstream's own status, `invalid_request_error` |
-| every leg advanced and the chain ran out (401, 403, 404, 429, connection, EOF) | 502 `api_error` |
+| a leg rejected the request shape (400, 422) and aborted the chain | the upstream's own status, `invalid_request_error` |
+| every leg advanced and the chain ran out (401, 403, 404, 413, 429, connection, EOF) | 502 `api_error` |
 | the whole-call budget expired | 504 `api_error` |
 | the client hung up mid-call | 499 |
 | nothing was attempted (unusable request, empty chain) | 400 `invalid_request_error` |

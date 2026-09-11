@@ -99,8 +99,8 @@ func decisiveLeg(attempts []smolllm.Attempt) *smolllm.LegError {
 	return nil
 }
 
-// isClientError reports whether the upstream blamed the request rather than
-// itself. 429 is excluded: the chain advances past it, so it never aborts.
+// isClientError checks the HTTP status range; the caller separately requires
+// DispositionAbort, excluding provider-local limits such as 413 and 429.
 func isClientError(status int) bool {
 	return status >= http.StatusBadRequest && status < http.StatusInternalServerError
 }

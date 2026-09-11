@@ -6,7 +6,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/joho/godotenv v1.5.1
 	github.com/openai/openai-go/v3 v3.56.0
-	github.com/rocry/smolllm-go v0.3.2
+	github.com/rocry/smolllm-go v0.3.4
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
 )

@@ -129,7 +129,7 @@ func (h *handlers) chatStream(
 			// The chain discards the failed leg's text and starts the next one
 			// from an empty turn, but whatever already reached the client cannot
 			// be recalled. Worth a log line when a stream reads oddly.
-			h.logger.Warn("stream leg failed after partial output",
+				h.logger.Warn("stream leg failed",
 				"model", event.Attempt.Model, "error", event.Attempt.Err)
 			slots = nil
 		case smolllm.EventDone:
