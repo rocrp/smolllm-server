@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rocry/smolllm-go/smolllm"
@@ -53,10 +54,11 @@ func (h *handlers) chatBlocking(
 	}
 
 	out := llm.ChatCompletion{
-		ID:      llm.NewID(),
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   resolvedModel(msg.Model, requestedModel),
+		ID:          llm.NewID(),
+		Object:      "chat.completion",
+		Created:     time.Now().Unix(),
+		Model:       resolvedModel(msg.Model, requestedModel),
+		ServiceTier: codexServiceTier(msg.Model),
 		Choices: []llm.ChatChoice{{
 			Index: 0,
 			Message: llm.ChatMessage{
@@ -129,7 +131,7 @@ func (h *handlers) chatStream(
 			// The chain discards the failed leg's text and starts the next one
 			// from an empty turn, but whatever already reached the client cannot
 			// be recalled. Worth a log line when a stream reads oddly.
-				h.logger.Warn("stream leg failed",
+			h.logger.Warn("stream leg failed",
 				"model", event.Attempt.Model, "error", event.Attempt.Err)
 			slots = nil
 		case smolllm.EventDone:
@@ -186,12 +188,13 @@ func (c *chunkWriter) write(delta llm.ChatDelta, finishReason *string, streamErr
 		c.write(llm.ChatDelta{Role: "assistant"}, nil)
 	}
 	chunk := llm.ChatCompletionChunk{
-		ID:      c.id,
-		Object:  "chat.completion.chunk",
-		Created: c.created,
-		Model:   c.model,
-		Choices: []llm.ChatChoiceDelta{{Index: 0, Delta: delta, FinishReason: finishReason}},
-		Error:   nil,
+		ID:          c.id,
+		Object:      "chat.completion.chunk",
+		Created:     c.created,
+		Model:       c.model,
+		ServiceTier: codexServiceTier(c.model),
+		Choices:     []llm.ChatChoiceDelta{{Index: 0, Delta: delta, FinishReason: finishReason}},
+		Error:       nil,
 	}
 	if len(streamErr) > 0 {
 		chunk.Error = streamErr[0]
@@ -232,6 +235,24 @@ func resolvedModel(actual, requested string) string {
 		return actual
 	}
 	return requested
+}
+
+// The Gateway echoes the requested Service Tier. smolllm-go retains the
+// winning leg's Model Spec but not that response field, so recover it from the
+// winning Codex spec. Never label a fallback to another Provider as Codex Fast.
+func codexServiceTier(model string) string {
+	name, codex := strings.CutPrefix(model, "smolayer/codex/")
+	if !codex || name == "" {
+		return ""
+	}
+	_, tier, explicit := strings.Cut(name, "@")
+	if !explicit {
+		return "default"
+	}
+	if tier == "fast" || tier == "default" {
+		return tier
+	}
+	return ""
 }
 
 // finishReasonForTurn reports the OpenAI-shaped reason for a completed turn.

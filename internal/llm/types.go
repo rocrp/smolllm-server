@@ -70,12 +70,13 @@ type EmbeddingRequest struct {
 
 // ChatCompletion is the OpenAI non-streaming response shape.
 type ChatCompletion struct {
-	ID      string          `json:"id"`
-	Object  string          `json:"object"`
-	Created int64           `json:"created"`
-	Model   string          `json:"model"`
-	Choices []ChatChoice    `json:"choices"`
-	Usage   CompletionUsage `json:"usage"`
+	ID          string          `json:"id"`
+	Object      string          `json:"object"`
+	Created     int64           `json:"created"`
+	Model       string          `json:"model"`
+	ServiceTier string          `json:"service_tier,omitempty"`
+	Choices     []ChatChoice    `json:"choices"`
+	Usage       CompletionUsage `json:"usage"`
 }
 
 type ChatChoice struct {
@@ -134,12 +135,13 @@ func UsageFrom(usage smolllm.Usage) CompletionUsage {
 
 // ChatCompletionChunk is a single SSE frame for streaming chat.
 type ChatCompletionChunk struct {
-	ID      string            `json:"id"`
-	Object  string            `json:"object"`
-	Created int64             `json:"created"`
-	Model   string            `json:"model"`
-	Choices []ChatChoiceDelta `json:"choices"`
-	Error   *ChatStreamError  `json:"error,omitempty"`
+	ID          string            `json:"id"`
+	Object      string            `json:"object"`
+	Created     int64             `json:"created"`
+	Model       string            `json:"model"`
+	ServiceTier string            `json:"service_tier,omitempty"`
+	Choices     []ChatChoiceDelta `json:"choices"`
+	Error       *ChatStreamError  `json:"error,omitempty"`
 }
 
 type ChatStreamError struct {
