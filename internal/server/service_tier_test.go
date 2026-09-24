@@ -11,11 +11,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/rocry/smolllm-go/smolllm"
 	"github.com/rocry/smolllm-server/internal/config"
+	"github.com/rocry/smolllm-server/internal/ledger"
 	"github.com/stretchr/testify/require"
 )
 
 func TestChatCompletions_ServiceTierFollowsWinningCodexLeg(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		chain     string
@@ -56,6 +59,7 @@ func TestChatCompletions_ServiceTierFollowsWinningCodexLeg(t *testing.T) {
 	} {
 		for _, streaming := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, streaming), func(t *testing.T) {
+				t.Parallel()
 				var mu sync.Mutex
 				var calls []string
 				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -85,19 +89,24 @@ func TestChatCompletions_ServiceTierFollowsWinningCodexLeg(t *testing.T) {
 					_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 				}))
 				t.Cleanup(upstream.Close)
-				t.Setenv("SMOLAYER_BASE_URL", upstream.URL)
-				t.Setenv("SMOLAYER_API_KEY", "test-key")
-				t.Setenv("GROQ_BASE_URL", upstream.URL)
-				t.Setenv("GROQ_API_KEY", "test-key")
-				t.Setenv("MOCK_BASE_URL", upstream.URL)
-				t.Setenv("MOCK_API_KEY", "test-key")
-
 				cfg := &config.Config{
 					Server:  config.ServerConfig{AccessKey: "test-client-key"},
 					Aliases: map[string]string{"alias": tc.chain},
 				}
-				srv := New(config.NewStore("", cfg), slog.New(slog.NewTextHandler(io.Discard, nil)))
-				ts := httptest.NewServer(srv.HTTP.Handler)
+				logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+				provider := smolllm.ProviderConfig{BaseURL: upstream.URL, APIKey: "test-key"}
+				h := &handlers{
+					store:  config.NewStore("", cfg),
+					logger: logger,
+					ledger: ledger.New(),
+					client: smolllm.New(
+						smolllm.WithLogger(logger),
+						smolllm.WithProvider("smolayer", provider),
+						smolllm.WithProvider("groq", provider),
+						smolllm.WithProvider("mock", provider),
+					),
+				}
+				ts := httptest.NewServer(http.HandlerFunc(h.chat))
 				t.Cleanup(ts.Close)
 				req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions",
 					strings.NewReader(fmt.Sprintf(`{"model":"alias","stream":%t,"messages":[{"role":"user","content":"hi"}]}`, streaming)))
