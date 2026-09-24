@@ -35,7 +35,7 @@ func TestChatCompletions_WorkBuddy429Advances(t *testing.T) {
 				mu.Lock()
 				calls = append(calls, body.Model)
 				mu.Unlock()
-				if body.Model == "workbuddy/glm-5.3-flash" {
+				if body.Model == "workbuddy/hy3" {
 					w.Header().Set("Content-Type", "application/json")
 					w.Header().Set("Retry-After", "30")
 					w.WriteHeader(http.StatusTooManyRequests)
@@ -53,7 +53,7 @@ func TestChatCompletions_WorkBuddy429Advances(t *testing.T) {
 			cfg := &config.Config{
 				Server: config.ServerConfig{AccessKey: "test-client-key"},
 				Aliases: map[string]string{
-					"explain": "smolayer/workbuddy/glm-5.3-flash!low,smolayer/codex/gpt-6-luna!low",
+					"explain": "smolayer/workbuddy/hy3!low,smolayer/codex/gpt-6-luna!low",
 				},
 			}
 			h := &handlers{
@@ -84,7 +84,7 @@ func TestChatCompletions_WorkBuddy429Advances(t *testing.T) {
 			require.Contains(t, string(answer), "fallback answer")
 			mu.Lock()
 			defer mu.Unlock()
-			require.Equal(t, []string{"workbuddy/glm-5.3-flash", "codex/gpt-6-luna"}, calls)
+			require.Equal(t, []string{"workbuddy/hy3", "codex/gpt-6-luna"}, calls)
 		})
 	}
 }
