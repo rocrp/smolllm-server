@@ -15,6 +15,12 @@ readonly CONFIG_PATH="${CONFIG_DIR}/config.yaml"
 readonly TARGET="${HOME}/Library/LaunchAgents/${PLIST}"
 # Matches server.bind in config.yaml; the port is hardcoded across the smolllm repos.
 readonly HEALTH_URL="http://127.0.0.1:11435/healthz"
+# The server reads its env file from ~/Documents (TCC-protected). TCC pins a
+# grant to the binary's designated requirement; an ad-hoc build's is its cdhash,
+# so every rebuild re-prompted and the service hung in open() until someone
+# clicked Allow. A stable identity + identifier keeps one grant across rebuilds.
+readonly CODESIGN_IDENTITY="${SMOLLLM_SERVER_CODESIGN_IDENTITY:-Developer ID Application: Tian Xia (C9FPMJGKC4)}"
+readonly CODESIGN_ID="${LABEL}"
 
 usage() {
     cat >&2 <<EOF
@@ -55,6 +61,11 @@ build_binary() {
         return 1
     fi
     chmod 755 "${tmp}"
+    if ! codesign --force --sign "${CODESIGN_IDENTITY}" --identifier "${CODESIGN_ID}" "${tmp}"; then
+        rm -f "${tmp}"
+        echo "✗ codesign failed; ${BIN_PATH} untouched" >&2
+        return 1
+    fi
     mv -f "${tmp}" "${BIN_PATH}"
     echo "✓ built ${BIN_PATH}"
 }
