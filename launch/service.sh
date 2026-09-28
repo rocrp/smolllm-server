@@ -39,12 +39,23 @@ resolve_repo_root() {
     cd "${script_dir}/.." && pwd -P
 }
 
+# Build beside the live binary, then rename over it. Writing in place let
+# launchd respawn the service from a half-written file, which the kernel killed
+# as OS_REASON_CODESIGNING (2026-09-24). A rename swaps the inode atomically: the
+# running process keeps the old file and the next spawn sees only the new one.
 build_binary() {
-    local repo
+    local repo tmp
     repo="$(resolve_repo_root)"
     mkdir -p "${BIN_DIR}"
+    tmp="$(mktemp "${BIN_PATH}.build.XXXXXX")"
     echo "→ building ${BIN_PATH} (from ${repo})"
-    (cd "${repo}" && go build -o "${BIN_PATH}" ./cmd/server)
+    if ! (cd "${repo}" && go build -o "${tmp}" ./cmd/server); then
+        rm -f "${tmp}"
+        echo "✗ build failed; ${BIN_PATH} untouched" >&2
+        return 1
+    fi
+    chmod 755 "${tmp}"
+    mv -f "${tmp}" "${BIN_PATH}"
     echo "✓ built ${BIN_PATH}"
 }
 

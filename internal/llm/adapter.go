@@ -93,6 +93,7 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.R
 	if extra := passThroughFields(req); len(extra) > 0 {
 		opts = append(opts, smolllm.WithExtraBody(extra))
 	}
+	opts = append(opts, promptCacheOptions(req)...)
 	if req.Timeout != nil {
 		if *req.Timeout < 0 {
 			return empty, nil, fmt.Errorf("timeout must be >= 0 (got %g)", *req.Timeout)
@@ -164,6 +165,31 @@ func restoreToolCallExtras(messages []smolllm.Message, raw []json.RawMessage) er
 		}
 	}
 	return nil
+}
+
+// promptCacheProviders accept `prompt_cache_key` and `user`. Other providers in
+// a chain may reject an unknown field outright, so these fields reach only these
+// providers' legs. smolayer turns the key into Codex's cache key and session.
+var promptCacheProviders = []string{"smolayer", "openai"}
+
+// promptCacheOptions scopes the request's cache-routing fields to the
+// providers that honor them.
+func promptCacheOptions(req *ChatRequest) []smolllm.Option {
+	fields := map[string]any{}
+	if req.PromptCacheKey != nil && strings.TrimSpace(*req.PromptCacheKey) != "" {
+		fields["prompt_cache_key"] = *req.PromptCacheKey
+	}
+	if req.User != nil && strings.TrimSpace(*req.User) != "" {
+		fields["user"] = *req.User
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	opts := make([]smolllm.Option, 0, len(promptCacheProviders))
+	for _, provider := range promptCacheProviders {
+		opts = append(opts, smolllm.WithProviderExtraBody(provider, fields))
+	}
+	return opts
 }
 
 // passThroughFields collects the request fields the server forwards verbatim.

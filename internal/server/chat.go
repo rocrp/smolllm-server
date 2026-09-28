@@ -20,6 +20,9 @@ func (h *handlers) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	note := noteFor(r)
+	note.alias = req.Model
+
 	turn, opts, err := llm.BuildOptions(&req, h.cfg().ResolveModel)
 	if err != nil {
 		badRequest(w, err.Error())
@@ -40,6 +43,7 @@ func (h *handlers) chatBlocking(
 	// Ask never reports an operational failure as a Go error: the turn it hands
 	// back says how the call ended.
 	msg := h.client.Ask(r.Context(), turn, opts...)
+	noteFor(r).model = servedModel(msg)
 	if msg.StopReason == smolllm.StopReasonError || msg.StopReason == smolllm.StopReasonAborted {
 		writeFailure(w, msg)
 		return
@@ -107,6 +111,7 @@ func (h *handlers) chatStream(
 		model: requestedModel,
 	}
 
+	note := noteFor(r)
 	var slots toolCallSlots
 	for event := range stream.Events() {
 		if event.Message != nil && event.Message.Model != "" {
@@ -135,12 +140,13 @@ func (h *handlers) chatStream(
 				"model", event.Attempt.Model, "error", event.Attempt.Err)
 			slots = nil
 		case smolllm.EventDone:
+			note.model = servedModel(event.Message)
 			reason := finishReasonForTurn(event.Message.FinishReason, len(event.Message.ToolCalls))
 			frames.write(llm.ChatDelta{}, &reason)
 			frames.done()
 			return
 		case smolllm.EventError:
-			h.streamFailure(frames, event.Message)
+			h.streamFailure(note, frames, event.Message)
 			return
 		case smolllm.EventStart, smolllm.EventToolCallEnd:
 			// Start carries no payload, and the completed call was already sent
@@ -150,13 +156,15 @@ func (h *handlers) chatStream(
 
 	// The channel closed without a terminal event, which the library does not do.
 	// Fail loudly rather than leaving the client waiting on a stream that ended.
-	h.streamFailure(frames, stream.Result())
+	h.streamFailure(note, frames, stream.Result())
 }
 
 // streamFailure reports a failed turn inside the stream. The status line is long
 // gone by now, so the failure travels as a terminal frame instead.
-func (h *handlers) streamFailure(frames *chunkWriter, msg *smolllm.AssistantMessage) {
+func (h *handlers) streamFailure(note *requestNote, frames *chunkWriter, msg *smolllm.AssistantMessage) {
 	failure := llm.FailureFor(msg)
+	note.model = servedModel(msg)
+	note.status = failure.Status
 	h.logger.Warn("stream failed", "status", failure.Status, "error", failure.Message)
 	reason := "error"
 	frames.write(llm.ChatDelta{}, &reason, &llm.ChatStreamError{
@@ -228,6 +236,21 @@ func (s *toolCallSlots) open(index int, msg *smolllm.AssistantMessage) (smolllm.
 		return smolllm.ToolCall{}, false
 	}
 	return msg.ToolCalls[position], true
+}
+
+// servedModel names the leg that answered, or for a failed turn the last leg
+// tried; "-" when no leg ran at all.
+func servedModel(msg *smolllm.AssistantMessage) string {
+	if msg == nil {
+		return "-"
+	}
+	if msg.Model != "" {
+		return msg.Model
+	}
+	if n := len(msg.Attempts); n > 0 && msg.Attempts[n-1].Model != "" {
+		return msg.Attempts[n-1].Model
+	}
+	return "-"
 }
 
 func resolvedModel(actual, requested string) string {

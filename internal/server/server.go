@@ -12,6 +12,12 @@ import (
 	"github.com/rocry/smolllm-server/internal/ledger"
 )
 
+// legBudget caps how long one leg may wait for its response to start, across
+// its retries, before the chain moves on. A dead provider cost ~95s before
+// (three 30s connect failures); healthy legs start well inside this, and a leg
+// that is already streaming is never cut by it.
+const legBudget = 45 * time.Second
+
 // Server bundles the HTTP server with its dependencies for graceful shutdown.
 // Bind is captured at listen time and is NOT hot-reloadable; everything else
 // is read fresh from Store on every request.
@@ -37,7 +43,7 @@ func New(store *config.Store, logger *slog.Logger) *Server {
 		store:  store,
 		logger: logger,
 		ledger: ledger.New(),
-		client: smolllm.New(smolllm.WithLogger(logger)),
+		client: smolllm.New(smolllm.WithLogger(logger), smolllm.WithLegBudget(legBudget)),
 	}
 
 	// Public routes (no auth)

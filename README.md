@@ -43,7 +43,17 @@ aliases:
 ```
 
 Aliases pass straight through to smolllm-go's `WithModel("a,b,c")`, which tries
-each in order and falls back on error.
+each in order and falls back on error. Each leg gets 45s to start responding,
+across its retries, before the chain moves on (`WithLegBudget`); a leg already
+streaming is never cut by it.
+
+`prompt_cache_key` and `user` on a request are forwarded only to `smolayer` and
+`openai` legs; other providers may reject unknown fields. smolayer maps the key
+to Codex's prompt cache and session, so give one conversation one stable key.
+
+Each request logs one `msg=request` line with `alias` (what the client asked
+for) and `model` (the leg that served it, or the last one tried). A stream that
+fails after its 200 went out logs the failure's status at WARN, not 200.
 
 ### Per-leg reasoning effort
 

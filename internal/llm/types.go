@@ -32,6 +32,11 @@ type ChatRequest struct {
 	ParallelToolCalls json.RawMessage `json:"parallel_tool_calls,omitempty"`
 	ResponseFormat    json.RawMessage `json:"response_format,omitempty"`
 
+	// Prompt-cache routing, forwarded only to providers that accept it (see
+	// promptCacheProviders).
+	PromptCacheKey *string `json:"prompt_cache_key,omitempty"`
+	User           *string `json:"user,omitempty"`
+
 	// Unsupported; presence triggers 400. The legacy functions API is deprecated
 	// upstream and superseded by tools.
 	Functions json.RawMessage `json:"functions,omitempty"`
