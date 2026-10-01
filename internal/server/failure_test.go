@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -137,30 +136,9 @@ func TestChatCompletions_StreamingReportsFailureInTerminalFrame(t *testing.T) {
 
 	resp := postChat(t, ts, `{"model":"fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	chunks := readStream(t, resp)
 
-	var (
-		terminal llm.ChatCompletionChunk
-		doneSeen bool
-	)
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		payload := strings.TrimPrefix(scanner.Text(), "data: ")
-		if payload == "" {
-			continue
-		}
-		if payload == "[DONE]" {
-			doneSeen = true
-			break
-		}
-		var chunk llm.ChatCompletionChunk
-		require.NoError(t, json.Unmarshal([]byte(payload), &chunk))
-		if chunk.Error != nil {
-			terminal = chunk
-		}
-	}
-	require.NoError(t, scanner.Err())
-	require.True(t, doneSeen)
+	terminal := chunks[len(chunks)-1]
 	require.NotNil(t, terminal.Error)
 	require.Equal(t, "invalid_request_error", terminal.Error.Type)
 	require.Contains(t, terminal.Error.Message, "bad tool schema")

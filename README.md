@@ -16,10 +16,6 @@ internal/apierr/    OpenAI-style error envelope
 launch/             LaunchAgent plist + install/reload/uninstall script
 ```
 
-`go.mod` carries `replace github.com/rocry/smolllm-go => ../smolllm-go` while
-`WithLegReasoningEffort` is unreleased; it becomes a `v0.3.2` pin once that is
-tagged.
-
 One `smolllm.Client` is built at startup and shared by every request: it owns the
 API-key and endpoint balancer, so a per-request client would restart key rotation
 on every call. Credentials still resolve per leg at call time, so hot-reloading
@@ -228,12 +224,20 @@ A streamed call has already sent its status line by the time a failure lands, so
 it reports one as a terminal frame carrying `finish_reason: "error"` plus an
 `error` object, followed by `[DONE]`.
 
-One caveat when a leg fails **after** it has already emitted output: the library
-discards that leg's partial turn and starts the next candidate from scratch, but
-bytes already on the wire cannot be recalled, so the client sees the abandoned
-text (or tool-call fragments) followed by the winning leg's own. The server logs
-`stream leg failed after partial output` when this happens. Most legs fail on
-their first byte, where nothing has been sent yet.
+A stream falls back only until a leg emits answer output. Once a leg has sent
+answer text or a tool-call fragment, the stream is committed to it (smolllm-go
+v0.4): if that leg then fails, the stream ends with the error frame above, after
+that leg's partial deltas, and never carries another leg's answer. The message
+ends with `(output already emitted, so the chain did not advance)`; a streaming
+client should discard the partial turn and retry. Reasoning does not commit, so
+reasoning from a failed leg can precede the next leg's answer. A caller that
+needs fallback after partial output should not stream: the non-streaming path
+emits nothing until the turn ends and returns only the winner's answer.
+
+The log tells the two cases apart: `stream leg failed before output` (with the
+leg's `disposition`: the chain retries or advances, or aborts on a rejected
+request) and `stream leg failed after partial output; ending the stream with an
+error`.
 
 The optional `timeout` request field (seconds) now bounds the **whole call** —
 every fallback leg, every retry, the backoff waits between them, and the
@@ -254,8 +258,8 @@ just build   # writes binary to ~/.local/bin/smolllm-server
 ```
 
 The chat handler tests (`internal/server/chat_test.go`,
-`internal/server/tool_calling_test.go`, `internal/server/failure_test.go`) spin
-up an `httptest.Server` posing as an OpenAI-style provider, point smolllm-go at
-it via `MOCK_BASE_URL` / `MOCK_API_KEY`, and exercise streaming, non-streaming,
-tool calling and every failure-to-status mapping end-to-end without touching the
-network.
+`internal/server/tool_calling_test.go`, `internal/server/failure_test.go`,
+`internal/server/stream_test.go`) spin up an `httptest.Server` posing as an
+OpenAI-style provider, point smolllm-go at it via `MOCK_BASE_URL` /
+`MOCK_API_KEY`, and exercise streaming, non-streaming, tool calling and every
+failure-to-status mapping end-to-end without touching the network.

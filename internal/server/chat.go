@@ -81,6 +81,10 @@ func (h *handlers) chatBlocking(
 	}
 }
 
+// chatStream relays one streamed call. smolllm-go commits a Stream to the first
+// leg that emits answer text or a tool-call fragment, so every answer delta
+// sent here comes from one leg: a committed leg that fails ends the stream in
+// the error frame instead of splicing in the next leg's answer.
 func (h *handlers) chatStream(
 	w http.ResponseWriter, r *http.Request, turn smolllm.Request, opts []smolllm.Option, requestedModel string,
 ) {
@@ -106,8 +110,9 @@ func (h *handlers) chatStream(
 		flusher: flusher,
 		id:      llm.NewID(),
 		created: time.Now().Unix(),
-		// Replaced by the served model as soon as a leg wins; only a stream that
-		// fails before any leg answers ever names the alias the client asked for.
+		// Follows the leg behind each event, so the finish frame names the leg
+		// that answered; only a stream that fails before any leg is tried names
+		// the alias the client asked for.
 		model: requestedModel,
 	}
 
@@ -133,12 +138,7 @@ func (h *handlers) chatStream(
 				llm.AppendToolCallArguments(event.Index, event.Delta),
 			}}, nil)
 		case smolllm.EventLegFailed:
-			// The chain discards the failed leg's text and starts the next one
-			// from an empty turn, but whatever already reached the client cannot
-			// be recalled. Worth a log line when a stream reads oddly.
-			h.logger.Warn("stream leg failed",
-				"model", event.Attempt.Model, "error", event.Attempt.Err)
-			slots = nil
+			h.logLegFailure(event.Attempt)
 		case smolllm.EventDone:
 			note.model = servedModel(event.Message)
 			reason := finishReasonForTurn(event.Message.FinishReason, len(event.Message.ToolCalls))
@@ -157,6 +157,20 @@ func (h *handlers) chatStream(
 	// The channel closed without a terminal event, which the library does not do.
 	// Fail loudly rather than leaving the client waiting on a stream that ended.
 	h.streamFailure(note, frames, stream.Result())
+}
+
+// logLegFailure tells apart the two ways a leg fails mid-stream. Before answer
+// output the chain retries or advances (unless the request itself was rejected)
+// and the client sees only the next try. After it the leg is committed: the
+// stream ends in the error frame, and the client must retry.
+func (h *handlers) logLegFailure(attempt *smolllm.Attempt) {
+	if attempt.Emitted {
+		h.logger.Warn("stream leg failed after partial output; ending the stream with an error",
+			"model", attempt.Model, "error", attempt.Err)
+		return
+	}
+	h.logger.Warn("stream leg failed before output",
+		"model", attempt.Model, "disposition", attempt.Err.Disposition.String(), "error", attempt.Err)
 }
 
 // streamFailure reports a failed turn inside the stream. The status line is long
@@ -221,7 +235,9 @@ func (c *chunkWriter) raw(payload string) {
 	c.flusher.Flush()
 }
 
-// toolCallSlots tracks the provider slot indexes opened so far, in order.
+// toolCallSlots tracks the provider slot indexes opened so far, in order. They
+// never need resetting: opening a slot commits the stream to its leg, so no
+// retry or later leg ever follows one.
 //
 // A tool-call event names its slot by the provider's index, but the message
 // snapshot it carries lists the calls sorted by that index and nothing else. The
@@ -239,18 +255,13 @@ func (s *toolCallSlots) open(index int, msg *smolllm.AssistantMessage) (smolllm.
 }
 
 // servedModel names the leg that answered, or for a failed turn the last leg
-// tried; "-" when no leg ran at all.
+// tried, which smolllm-go v0.4 puts on the message itself; "-" when that leg
+// never resolved to a model (or no leg ran at all).
 func servedModel(msg *smolllm.AssistantMessage) string {
-	if msg == nil {
+	if msg == nil || msg.Model == "" {
 		return "-"
 	}
-	if msg.Model != "" {
-		return msg.Model
-	}
-	if n := len(msg.Attempts); n > 0 && msg.Attempts[n-1].Model != "" {
-		return msg.Attempts[n-1].Model
-	}
-	return "-"
+	return msg.Model
 }
 
 func resolvedModel(actual, requested string) string {

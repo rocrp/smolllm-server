@@ -287,54 +287,17 @@ func TestChatCompletions_StreamingWaitErrorUsesTerminalChunk(t *testing.T) {
 	ts := httptest.NewServer(srv.HTTP.Handler)
 	t.Cleanup(ts.Close)
 
-	body := `{"model":"fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer rocry")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	resp := postChat(t, ts, `{"model":"fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	chunks := readStream(t, resp)
 
-	var terminal struct {
-		Choices []struct {
-			FinishReason *string `json:"finish_reason"`
-		} `json:"choices"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	var doneSeen bool
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		payload := strings.TrimPrefix(line, "data: ")
-		if payload == "[DONE]" {
-			doneSeen = true
-			break
-		}
-		var frame struct {
-			Choices []struct {
-				FinishReason *string `json:"finish_reason"`
-			} `json:"choices"`
-			Error *struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		require.NoError(t, json.Unmarshal([]byte(payload), &frame))
-		if frame.Error != nil {
-			terminal = frame
-		}
-	}
-	require.NoError(t, scanner.Err())
-	require.True(t, doneSeen)
+	// The partial text already went out, so the leg is committed: the stream
+	// ends in the error frame rather than retrying behind the client's back.
+	require.Equal(t, "hel", streamedText(chunks))
+	terminal := chunks[len(chunks)-1]
 	require.NotNil(t, terminal.Error)
 	require.Contains(t, terminal.Error.Message, "malformed streaming chunk")
+	require.Contains(t, terminal.Error.Message, "output already emitted")
 	require.Len(t, terminal.Choices, 1)
 	require.NotNil(t, terminal.Choices[0].FinishReason)
 	require.Equal(t, "error", *terminal.Choices[0].FinishReason)
