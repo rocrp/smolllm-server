@@ -249,6 +249,13 @@ or not, with the cached share repeated under `prompt_tokens_details.cached_token
 and reasoning tokens under `completion_tokens_details.reasoning_tokens`. The
 details appear only when a provider reported them.
 
+A stream carries usage only when the request sets
+`stream_options: {"include_usage": true}`: then, as OpenAI does, one last frame
+before `[DONE]` has empty `choices` and the `usage`. Each frame names the leg
+behind it, so the finish frame and the usage frame name the leg that answered;
+reasoning frames from a leg that failed before answering name that leg. A stream
+that ends in the error frame carries no usage frame.
+
 ## Development
 
 ```bash

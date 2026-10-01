@@ -25,6 +25,8 @@ type ChatRequest struct {
 	// Timeout in seconds. 0 disables the timeout (relies on the request context).
 	// When omitted, smolllm-go's default applies.
 	Timeout *float64 `json:"timeout,omitempty"`
+	// StreamOptions is read by the server itself, never forwarded.
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
 
 	// Pass-through fields: forwarded to the provider verbatim, never modeled.
 	Tools             json.RawMessage `json:"tools,omitempty"`
@@ -63,6 +65,18 @@ func (r *ChatRequest) UnmarshalJSON(data []byte) error {
 	*r = ChatRequest(decoded)
 	r.rawMessages = envelope.Messages
 	return nil
+}
+
+// StreamOptions mirrors OpenAI's stream_options. A non-streaming response always
+// carries usage, so it matters only on a stream.
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// IncludeUsage reports whether the client asked for a usage frame at the end of
+// its stream.
+func (r *ChatRequest) IncludeUsage() bool {
+	return r.StreamOptions != nil && r.StreamOptions.IncludeUsage
 }
 
 // EmbeddingRequest mirrors POST /v1/embeddings.
@@ -146,7 +160,10 @@ type ChatCompletionChunk struct {
 	Model       string            `json:"model"`
 	ServiceTier string            `json:"service_tier,omitempty"`
 	Choices     []ChatChoiceDelta `json:"choices"`
-	Error       *ChatStreamError  `json:"error,omitempty"`
+	// Usage is set only on the frame stream_options.include_usage asks for, which
+	// carries empty choices and comes last before [DONE].
+	Usage *CompletionUsage `json:"usage,omitempty"`
+	Error *ChatStreamError `json:"error,omitempty"`
 }
 
 type ChatStreamError struct {

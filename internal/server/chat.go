@@ -31,7 +31,7 @@ func (h *handlers) chat(w http.ResponseWriter, r *http.Request) {
 	opts = append(opts, smolllm.WithHook(h.ledger.Hook(req.Model)))
 
 	if req.Stream {
-		h.chatStream(w, r, turn, opts, req.Model)
+		h.chatStream(w, r, turn, opts, req.Model, req.IncludeUsage())
 		return
 	}
 	h.chatBlocking(w, r, turn, opts, req.Model)
@@ -87,6 +87,7 @@ func (h *handlers) chatBlocking(
 // the error frame instead of splicing in the next leg's answer.
 func (h *handlers) chatStream(
 	w http.ResponseWriter, r *http.Request, turn smolllm.Request, opts []smolllm.Option, requestedModel string,
+	includeUsage bool,
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -143,6 +144,9 @@ func (h *handlers) chatStream(
 			note.model = servedModel(event.Message)
 			reason := finishReasonForTurn(event.Message.FinishReason, len(event.Message.ToolCalls))
 			frames.write(llm.ChatDelta{}, &reason)
+			if includeUsage {
+				frames.usage(llm.UsageFrom(event.Message.Usage))
+			}
 			frames.done()
 			return
 		case smolllm.EventError:
@@ -209,18 +213,35 @@ func (c *chunkWriter) write(delta llm.ChatDelta, finishReason *string, streamErr
 		c.opened = true
 		c.write(llm.ChatDelta{Role: "assistant"}, nil)
 	}
-	chunk := llm.ChatCompletionChunk{
+	chunk := c.chunk([]llm.ChatChoiceDelta{{Index: 0, Delta: delta, FinishReason: finishReason}})
+	if len(streamErr) > 0 {
+		chunk.Error = streamErr[0]
+	}
+	c.send(chunk)
+}
+
+// usage writes the frame stream_options.include_usage asks for: empty choices
+// and the usage, after the finish frame and before [DONE].
+func (c *chunkWriter) usage(usage llm.CompletionUsage) {
+	chunk := c.chunk([]llm.ChatChoiceDelta{})
+	chunk.Usage = &usage
+	c.send(chunk)
+}
+
+func (c *chunkWriter) chunk(choices []llm.ChatChoiceDelta) llm.ChatCompletionChunk {
+	return llm.ChatCompletionChunk{
 		ID:          c.id,
 		Object:      "chat.completion.chunk",
 		Created:     c.created,
 		Model:       c.model,
 		ServiceTier: codexServiceTier(c.model),
-		Choices:     []llm.ChatChoiceDelta{{Index: 0, Delta: delta, FinishReason: finishReason}},
+		Choices:     choices,
+		Usage:       nil,
 		Error:       nil,
 	}
-	if len(streamErr) > 0 {
-		chunk.Error = streamErr[0]
-	}
+}
+
+func (c *chunkWriter) send(chunk llm.ChatCompletionChunk) {
 	encoded, err := json.Marshal(chunk)
 	if err != nil {
 		return

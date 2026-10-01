@@ -81,6 +81,7 @@ func requireCommittedFailure(
 	require.Equal(t, "error", *terminal.Choices[0].FinishReason)
 	for _, chunk := range chunks {
 		require.Equal(t, "smolayer/alpha", chunk.Model, "every frame names the committed leg")
+		require.Nil(t, chunk.Usage)
 	}
 	require.NotContains(t, streamedText(chunks), "beta answer")
 
@@ -152,4 +153,48 @@ func TestChatCompletions_StreamFallsBackWhenLegFailsAfterReasoningOnly(t *testin
 	require.Contains(t, line, "status=200")
 	require.Contains(t, line, "model=mock/beta")
 	require.Contains(t, logs.String(), "stream leg failed before output")
+}
+
+// stream_options.include_usage follows OpenAI: one extra frame before [DONE]
+// with empty choices and the usage, naming the leg that answered.
+func TestChatCompletions_StreamIncludesUsageWhenAsked(t *testing.T) {
+	tests := []struct {
+		name      string
+		options   string
+		wantUsage bool
+	}{
+		{name: "include_usage true", options: `"stream_options":{"include_usage":true},`, wantUsage: true},
+		{name: "include_usage false", options: `"stream_options":{"include_usage":false},`, wantUsage: false},
+		{name: "stream_options absent", options: "", wantUsage: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts, _, _ := newCacheRig(t, rateLimited)
+
+			resp := postChat(t, ts, `{"model":"fast","stream":true,`+tt.options+
+				`"messages":[{"role":"user","content":"hi"}]}`)
+			defer resp.Body.Close()
+			chunks := readStream(t, resp)
+			require.Equal(t, "beta answer", streamedText(chunks))
+
+			last := chunks[len(chunks)-1]
+			if !tt.wantUsage {
+				for _, chunk := range chunks {
+					require.Nil(t, chunk.Usage)
+				}
+				require.Equal(t, "stop", *last.Choices[0].FinishReason)
+				return
+			}
+			require.NotNil(t, last.Usage)
+			require.Positive(t, last.Usage.TotalTokens)
+			require.NotNil(t, last.Choices, "choices is an empty array, not null")
+			require.Empty(t, last.Choices)
+			require.Equal(t, "mock/beta", last.Model)
+
+			finish := chunks[len(chunks)-2]
+			require.Nil(t, finish.Usage)
+			require.Equal(t, "stop", *finish.Choices[0].FinishReason)
+			require.Equal(t, "mock/beta", finish.Model)
+		})
+	}
 }
