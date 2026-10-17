@@ -32,7 +32,7 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, err.Error())
 		return
 	}
-	opts = append(opts, smolllm.WithHook(h.ledger.Hook(req.Model)))
+	opts = append(opts, smolllm.WithHook(h.ledger.Hook(noteFor(r).key, req.Model)))
 	if req.Dimensions != nil && *req.Dimensions > 0 {
 		opts = append(opts, smolllm.WithDimensions(*req.Dimensions))
 	}

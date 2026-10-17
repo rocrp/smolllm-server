@@ -49,9 +49,13 @@ func New(store *config.Store, logger *slog.Logger) *Server {
 	// Public routes (no auth)
 	mux.HandleFunc("GET /healthz", h.health)
 
-	// Protected routes — auth middleware reads the access key from the store
-	// per request, so SIGHUP-driven access_key rotation takes effect immediately.
-	authMW := auth.Middleware(func() string { return store.Get().Server.AccessKey })
+	// Protected routes — auth middleware reads the keys from the store per
+	// request, so a reload that adds or revokes a key takes effect immediately.
+	// The key's name rides the request note into the log line and the ledger.
+	authMW := auth.Middleware(
+		func() map[string]string { return store.Get().Keys() },
+		func(r *http.Request, name string) { noteFor(r).key = name },
+	)
 	mux.Handle("POST /v1/chat/completions", authMW(http.HandlerFunc(h.chat)))
 	mux.Handle("POST /v1/embeddings", authMW(http.HandlerFunc(h.embeddings)))
 	mux.Handle("GET /v1/models", authMW(http.HandlerFunc(h.models)))

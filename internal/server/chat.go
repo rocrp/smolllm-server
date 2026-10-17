@@ -28,7 +28,7 @@ func (h *handlers) chat(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, err.Error())
 		return
 	}
-	opts = append(opts, smolllm.WithHook(h.ledger.Hook(req.Model)))
+	opts = append(opts, smolllm.WithHook(h.ledger.Hook(note.key, req.Model)))
 
 	if req.Stream {
 		h.chatStream(w, r, turn, opts, req.Model, req.IncludeUsage())

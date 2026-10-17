@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -59,7 +61,7 @@ func run() error {
 		"path", cfgPath,
 		"bind", cfg.Server.Bind,
 		"aliases", aliasNames(cfg.Aliases),
-		"access_key", maskKey(cfg.Server.AccessKey),
+		"keys", keyNames(cfg.Keys()),
 		"env_file", cfg.Server.EnvFile,
 	)
 
@@ -156,7 +158,7 @@ func doReload(store *config.Store, srv *server.Server, levelVar *slog.LevelVar, 
 	logger.Info("config reloaded",
 		"path", store.Path(),
 		"aliases", aliasNames(newCfg.Aliases),
-		"access_key", maskKey(newCfg.Server.AccessKey),
+		"keys", keyNames(newCfg.Keys()),
 		"log_level", newCfg.Server.LogLevel,
 	)
 	if newCfg.Server.Bind != srv.Bind() {
@@ -186,9 +188,7 @@ func aliasNames(m map[string]string) []string {
 	return out
 }
 
-func maskKey(k string) string {
-	if len(k) <= 2 {
-		return "***"
-	}
-	return string(k[0]) + strings.Repeat("*", len(k)-2) + string(k[len(k)-1])
+// keyNames lists the access keys by name only: a key never reaches the log.
+func keyNames(keys map[string]string) []string {
+	return slices.Sorted(maps.Keys(keys))
 }

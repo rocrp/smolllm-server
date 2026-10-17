@@ -29,9 +29,10 @@ func (r *statusRecorder) Flush() {
 }
 
 // requestNote is what a handler tells the request log line beyond the status
-// line: which alias was asked for, which model served it, and how a stream that
-// already sent 200 actually ended.
+// line: which access key authenticated it (by name), which alias was asked for,
+// which model served it, and how a stream that already sent 200 actually ended.
 type requestNote struct {
+	key   string
 	alias string
 	model string
 	// status overrides the wire status when a stream failed after its 200.
@@ -46,7 +47,7 @@ func noteFor(r *http.Request) *requestNote {
 	if note, ok := r.Context().Value(requestNoteKey{}).(*requestNote); ok {
 		return note
 	}
-	return &requestNote{alias: "", model: "", status: 0}
+	return &requestNote{key: "", alias: "", model: "", status: 0}
 }
 
 func logMW(logger *slog.Logger) func(http.Handler) http.Handler {
@@ -54,7 +55,7 @@ func logMW(logger *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			rec := &statusRecorder{ResponseWriter: w, status: 200}
-			note := &requestNote{alias: "", model: "", status: 0}
+			note := &requestNote{key: "", alias: "", model: "", status: 0}
 			next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), requestNoteKey{}, note)))
 			status := rec.status
 			if note.status != 0 {
@@ -66,6 +67,9 @@ func logMW(logger *slog.Logger) func(http.Handler) http.Handler {
 				"status", status,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"remote", r.RemoteAddr,
+			}
+			if note.key != "" {
+				attrs = append(attrs, "key", note.key)
 			}
 			if note.alias != "" {
 				attrs = append(attrs, "alias", note.alias, "model", note.model)

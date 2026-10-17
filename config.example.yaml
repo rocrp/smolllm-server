@@ -4,8 +4,13 @@
 
 server:
   bind: 0.0.0.0:11435
-  # Authorization: Bearer <access_key>. REQUIRED. Override with SMOLLLM_SERVER_ACCESS_KEY.
-  access_key: change-me
+  # Authorization: Bearer <key>. At least one of access_key / access_keys is REQUIRED;
+  # both together = the union. Override access_key with SMOLLLM_SERVER_ACCESS_KEY.
+  access_key: change-me  # logged and counted in /stats as key=default
+  # One key per client, revocable alone (hot reload: removed = 401 on the next request).
+  # The request log and /stats name the key (key=rctlsr), never the key itself.
+  access_keys:
+    rctlsr: change-me-too
   # Loaded at startup; existing env vars are NOT overwritten.
   env_file: ~/.env.smolllm
   log_level: info  # debug | info | warn | error

@@ -11,12 +11,13 @@ import (
 
 const retention = 31 * 24 * time.Hour
 
-// Bucket aggregates attempts sharing a UTC day, requested alias, and served
-// provider/model. The token columns follow smolllm-go's Usage: InputTokens
+// Bucket aggregates attempts sharing a UTC day, access key name, requested
+// alias, and served provider/model. The token columns follow smolllm-go's Usage: InputTokens
 // EXCLUDES cache reads, which are counted on their own, and OutputTokens
 // INCLUDES the reasoning tokens reported beside it.
 type Bucket struct {
 	Day               string `json:"day"`
+	Key               string `json:"key"`
 	Alias             string `json:"alias"`
 	Provider          string `json:"provider"`
 	Model             string `json:"model"`
@@ -31,6 +32,7 @@ type Bucket struct {
 
 type bucketKey struct {
 	day      string
+	key      string
 	alias    string
 	provider string
 	model    string
@@ -47,36 +49,39 @@ func New() *Ledger {
 	return &Ledger{buckets: make(map[bucketKey]Bucket)}
 }
 
-// Hook returns a smolllm-go request hook bound to the alias or raw model string
-// the client asked for. It fires once per attempt, successful or not.
-func (l *Ledger) Hook(alias string) func(smolllm.Attempt) {
+// Hook returns a smolllm-go request hook bound to the name of the access key
+// that authenticated the call and the alias or raw model string it asked for.
+// It fires once per attempt, successful or not.
+func (l *Ledger) Hook(key, alias string) func(smolllm.Attempt) {
 	return func(attempt smolllm.Attempt) {
-		l.Record(alias, attempt)
+		l.Record(key, alias, attempt)
 	}
 }
 
 // Record adds one attempt to its stats bucket, dated now. smolllm-go stopped
 // timestamping attempts in v0.3, and the hook fires as each leg finishes, so the
 // moment of recording is the moment the attempt ended.
-func (l *Ledger) Record(alias string, attempt smolllm.Attempt) {
-	l.recordAt(time.Now().UTC(), alias, attempt)
+func (l *Ledger) Record(key, alias string, attempt smolllm.Attempt) {
+	l.recordAt(time.Now().UTC(), key, alias, attempt)
 }
 
-func (l *Ledger) recordAt(at time.Time, alias string, attempt smolllm.Attempt) {
+func (l *Ledger) recordAt(at time.Time, key, alias string, attempt smolllm.Attempt) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	key := bucketKey{
+	bk := bucketKey{
 		day:      at.UTC().Format(time.DateOnly),
+		key:      key,
 		alias:    alias,
 		provider: attempt.Provider,
 		model:    attempt.ModelName,
 	}
-	bucket := l.buckets[key]
-	bucket.Day = key.day
-	bucket.Alias = key.alias
-	bucket.Provider = key.provider
-	bucket.Model = key.model
+	bucket := l.buckets[bk]
+	bucket.Day = bk.day
+	bucket.Key = bk.key
+	bucket.Alias = bk.alias
+	bucket.Provider = bk.provider
+	bucket.Model = bk.model
 	bucket.Requests++
 	if attempt.Failed() {
 		bucket.Failures++
@@ -88,7 +93,7 @@ func (l *Ledger) recordAt(at time.Time, alias string, attempt smolllm.Attempt) {
 	if attempt.Usage.Estimated {
 		bucket.EstimatedRequests++
 	}
-	l.buckets[key] = bucket
+	l.buckets[bk] = bucket
 	l.pruneLocked(time.Now().UTC())
 }
 
@@ -105,6 +110,9 @@ func (l *Ledger) Snapshot() []Bucket {
 	sort.Slice(buckets, func(i, j int) bool {
 		if buckets[i].Day != buckets[j].Day {
 			return buckets[i].Day < buckets[j].Day
+		}
+		if buckets[i].Key != buckets[j].Key {
+			return buckets[i].Key < buckets[j].Key
 		}
 		if buckets[i].Alias != buckets[j].Alias {
 			return buckets[i].Alias < buckets[j].Alias

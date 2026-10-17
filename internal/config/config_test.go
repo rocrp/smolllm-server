@@ -218,3 +218,42 @@ func TestLoadEnvFile_LoadsKeysWithoutOverwriting(t *testing.T) {
 	require.Equal(t, "preexisting", os.Getenv("FOO_API_KEY")) // not overwritten
 	require.Equal(t, "http://x", os.Getenv("BAR_BASE_URL"))   // newly set
 }
+
+func load(t *testing.T, yaml string) (*Config, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+	return Load(path)
+}
+
+func TestLoad_NamedKeysAlone(t *testing.T) {
+	t.Parallel()
+	cfg, err := load(t, "server:\n  access_keys:\n    laptop: k1\n    rctlsr: k2\n")
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"laptop": "k1", "rctlsr": "k2"}, cfg.Keys())
+}
+
+func TestLoad_NamedKeysBesideAccessKeyAreTheUnion(t *testing.T) {
+	t.Parallel()
+	cfg, err := load(t, "server:\n  access_key: k0\n  access_keys:\n    rctlsr: k2\n")
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"default": "k0", "rctlsr": "k2"}, cfg.Keys())
+}
+
+func TestLoad_RejectsBadNamedKeys(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"one key under two names":        {"server:\n  access_keys:\n    a: same\n    b: same\n", "a and b share one key"},
+		"named key equals access_key":    {"server:\n  access_key: same\n  access_keys:\n    b: same\n", "b and default share one key"},
+		"name default beside access_key": {"server:\n  access_key: k0\n  access_keys:\n    default: k1\n", "clashes with server.access_key"},
+		"empty key":                      {"server:\n  access_keys:\n    a: \"\"\n", "server.access_keys.a must not be empty"},
+		"name with space":                {"server:\n  access_keys:\n    \"a b\": k\n", `name "a b"`},
+		"no key at all":                  {"server:\n  access_keys: {}\n", "server.access_key or server.access_keys"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := load(t, tc.yaml)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}

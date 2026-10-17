@@ -8,61 +8,65 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMiddleware(t *testing.T) {
-	t.Parallel()
+// serve runs one request through mw and reports the status and the key name
+// the handler saw ("" when it never ran).
+func serve(mw func(http.Handler) http.Handler, seen *string, header string) int {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := Middleware(func() string { return "rocry" })(ok)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	if header != "" {
+		req.Header.Set("Authorization", header)
+	}
+	rec := httptest.NewRecorder()
+	*seen = ""
+	mw(ok).ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func TestMiddleware(t *testing.T) {
+	t.Parallel()
+	keys := map[string]string{"laptop": "k-laptop", "rctlsr": "k-rctlsr"}
 
 	tests := []struct {
 		name       string
 		header     string
 		wantStatus int
+		wantKey    string
 	}{
-		{"missing header", "", http.StatusUnauthorized},
-		{"wrong token", "Bearer wrong", http.StatusUnauthorized},
-		{"correct token with bearer", "Bearer rocry", http.StatusOK},
-		{"correct token without bearer", "rocry", http.StatusOK},
-		{"correct token lowercase bearer", "bearer rocry", http.StatusOK},
-		{"empty bearer", "Bearer ", http.StatusUnauthorized},
+		{"missing header", "", http.StatusUnauthorized, ""},
+		{"third string", "Bearer k-other", http.StatusUnauthorized, ""},
+		{"prefix of a key", "Bearer k-rct", http.StatusUnauthorized, ""},
+		{"first key", "Bearer k-laptop", http.StatusOK, "laptop"},
+		{"second key", "Bearer k-rctlsr", http.StatusOK, "rctlsr"},
+		{"without bearer", "k-rctlsr", http.StatusOK, "rctlsr"},
+		{"lowercase bearer", "bearer k-laptop", http.StatusOK, "laptop"},
+		{"empty bearer", "Bearer ", http.StatusUnauthorized, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-			if tc.header != "" {
-				req.Header.Set("Authorization", tc.header)
-			}
-			rec := httptest.NewRecorder()
-			mw.ServeHTTP(rec, req)
-			require.Equal(t, tc.wantStatus, rec.Code)
+			var seen string
+			mw := Middleware(func() map[string]string { return keys },
+				func(_ *http.Request, name string) { seen = name })
+			require.Equal(t, tc.wantStatus, serve(mw, &seen, tc.header))
+			require.Equal(t, tc.wantKey, seen)
 		})
 	}
 }
 
-func TestMiddleware_KeyFnHotRotation(t *testing.T) {
+func TestMiddleware_RevokedKeyIs401(t *testing.T) {
 	t.Parallel()
-	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	current := "old"
-	mw := Middleware(func() string { return current })(ok)
+	current := map[string]string{"laptop": "k-laptop", "rctlsr": "k-rctlsr"}
+	var seen string
+	mw := Middleware(func() map[string]string { return current },
+		func(_ *http.Request, name string) { seen = name })
 
-	doReq := func(token string) int {
-		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
-		rec := httptest.NewRecorder()
-		mw.ServeHTTP(rec, req)
-		return rec.Code
-	}
-
-	require.Equal(t, http.StatusOK, doReq("old"))
-	require.Equal(t, http.StatusUnauthorized, doReq("new"))
-
-	current = "new" // simulate SIGHUP reload
-	require.Equal(t, http.StatusUnauthorized, doReq("old"))
-	require.Equal(t, http.StatusOK, doReq("new"))
+	require.Equal(t, http.StatusOK, serve(mw, &seen, "Bearer k-rctlsr"))
+	current = map[string]string{"laptop": "k-laptop"} // a reload dropped rctlsr
+	require.Equal(t, http.StatusUnauthorized, serve(mw, &seen, "Bearer k-rctlsr"))
+	require.Equal(t, http.StatusOK, serve(mw, &seen, "Bearer k-laptop"))
+	require.Equal(t, "laptop", seen)
 }
 
 func TestExtractToken(t *testing.T) {

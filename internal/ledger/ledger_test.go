@@ -53,11 +53,12 @@ func TestLedgerAggregatesAttempts(t *testing.T) {
 	t.Parallel()
 
 	ledger := New()
-	ledger.Record("fast", attempt("mock", "marvin-7b", usage(11, 7, 4, 3, false), nil))
-	ledger.Record("fast", attempt("mock", "marvin-7b", usage(5, 0, 0, 0, true), errors.New("upstream failed")))
+	ledger.Record("default", "fast", attempt("mock", "marvin-7b", usage(11, 7, 4, 3, false), nil))
+	ledger.Record("default", "fast", attempt("mock", "marvin-7b", usage(5, 0, 0, 0, true), errors.New("upstream failed")))
 
 	require.Equal(t, []Bucket{{
 		Day:               time.Now().UTC().Format(time.DateOnly),
+		Key:               "default",
 		Alias:             "fast",
 		Provider:          "mock",
 		Model:             "marvin-7b",
@@ -77,7 +78,7 @@ func TestLedgerKeepsCachedAndReasoningTokensSeparate(t *testing.T) {
 	t.Parallel()
 
 	ledger := New()
-	ledger.Record("fast", attempt("mock", "marvin-7b", usage(10, 20, 90, 15, false), nil))
+	ledger.Record("default", "fast", attempt("mock", "marvin-7b", usage(10, 20, 90, 15, false), nil))
 
 	bucket := ledger.Snapshot()[0]
 	require.Equal(t, 10, bucket.InputTokens)
@@ -93,7 +94,7 @@ func TestLedgerCountsEveryRetryOfOneLeg(t *testing.T) {
 	for retry := range 3 {
 		record := attempt("mock", "marvin-7b", usage(4, 0, 0, 0, true), errors.New("overloaded"))
 		record.Retry = retry
-		ledger.Record("fast", record)
+		ledger.Record("default", "fast", record)
 	}
 
 	bucket := ledger.Snapshot()[0]
@@ -102,22 +103,26 @@ func TestLedgerCountsEveryRetryOfOneLeg(t *testing.T) {
 	require.Equal(t, 12, bucket.InputTokens)
 }
 
-func TestLedgerSeparatesAliasAndServedModel(t *testing.T) {
+func TestLedgerSeparatesKeyAliasAndServedModel(t *testing.T) {
 	t.Parallel()
 
 	ledger := New()
 	for _, event := range []struct {
+		key   string
 		alias string
 		model string
 	}{
-		{alias: "fast", model: "alpha"},
-		{alias: "mock/alpha", model: "alpha"},
-		{alias: "fast", model: "beta"},
+		{key: "default", alias: "fast", model: "alpha"},
+		{key: "default", alias: "mock/alpha", model: "alpha"},
+		{key: "default", alias: "fast", model: "beta"},
+		{key: "rctlsr", alias: "fast", model: "alpha"},
 	} {
-		ledger.Record(event.alias, attempt("mock", event.model, usage(0, 0, 0, 0, false), nil))
+		ledger.Record(event.key, event.alias, attempt("mock", event.model, usage(0, 0, 0, 0, false), nil))
 	}
 
-	require.Len(t, ledger.Snapshot(), 3)
+	buckets := ledger.Snapshot()
+	require.Len(t, buckets, 4)
+	require.Equal(t, "rctlsr", buckets[3].Key, "sorted by day, then key")
 }
 
 func TestLedgerPrunesExpiredBuckets(t *testing.T) {
@@ -125,9 +130,9 @@ func TestLedgerPrunesExpiredBuckets(t *testing.T) {
 
 	now := time.Now().UTC()
 	ledger := New()
-	ledger.recordAt(now.Add(-retention-24*time.Hour), "old",
+	ledger.recordAt(now.Add(-retention-24*time.Hour), "default", "old",
 		attempt("mock", "old", usage(0, 0, 0, 0, false), nil))
-	ledger.recordAt(now, "current", attempt("mock", "current", usage(0, 0, 0, 0, false), nil))
+	ledger.recordAt(now, "default", "current", attempt("mock", "current", usage(0, 0, 0, 0, false), nil))
 
 	buckets := ledger.Snapshot()
 	require.Len(t, buckets, 1)

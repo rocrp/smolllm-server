@@ -124,6 +124,8 @@ func TestRequestLog_NamesAliasAndServedModel(t *testing.T) {
 
 	line := logs.requestLine(t)
 	require.Contains(t, line, "status=200")
+	require.Contains(t, line, "key=default", "the single access_key is logged by its name")
+	require.NotContains(t, line, "rocry", "never the key itself")
 	require.Contains(t, line, "alias=fast")
 	require.Contains(t, line, "model=mock/beta")
 }

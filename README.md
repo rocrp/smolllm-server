@@ -29,7 +29,9 @@ Default config path: `~/.config/smolllm-server/config.yaml`. Override with
 ```yaml
 server:
   bind: 0.0.0.0:11435
-  access_key: change-me       # REQUIRED. SMOLLLM_SERVER_ACCESS_KEY env wins if set
+  access_key: change-me       # SMOLLLM_SERVER_ACCESS_KEY env wins if set; logged as key=default
+  access_keys:                # one per client, revocable alone; logged by name
+    rctlsr: another-secret
   env_file: ~/.env.smolllm    # provider keys: ${PROVIDER}_API_KEY etc.
   log_level: info
 
@@ -37,6 +39,10 @@ aliases:
   fast: cerebras/qwen-3-235b-a22b-instruct-2507,groq/qwen/qwen3-32b!none,gemini/gemini-flash-latest
   translator: ollama/frob/hy-mt1.5:latest,gemini/gemini-flash-lite-latest
 ```
+
+At least one key is required: `access_key`, `access_keys`, or both (the union
+authenticates). Load refuses one key under two names, an empty key, and a named
+key `default` beside `access_key` (that name is `access_key`'s).
 
 Aliases pass straight through to smolllm-go's `WithModel("a,b,c")`, which tries
 each in order and falls back on error. Each leg gets 45s to start responding,
@@ -47,7 +53,8 @@ streaming is never cut by it.
 `openai` legs; other providers may reject unknown fields. smolayer maps the key
 to Codex's prompt cache and session, so give one conversation one stable key.
 
-Each request logs one `msg=request` line with `alias` (what the client asked
+Each request logs one `msg=request` line with `key` (the name of the access key
+that authenticated it, never the key), `alias` (what the client asked
 for) and `model` (the leg that served it, or the last one tried). A stream that
 fails after its 200 went out logs the failure's status at WARN, not 200.
 
@@ -102,7 +109,8 @@ just logs         # tail ~/Library/Logs/personal.smolllm-server.log
 ### Hot reload
 
 Just edit the YAML — the server picks it up automatically (~200 ms debounce
-via fsnotify). Hot-reloadable: `aliases`, `server.access_key`,
+via fsnotify). Hot-reloadable: `aliases`, `server.access_key`, `server.access_keys`
+(a removed key is refused on the next request),
 `server.log_level`, and `server.env_file` contents (re-sourced with overwrite
 so rotated provider keys take effect). Invalid YAML is rejected and the
 previous snapshot is retained.
@@ -117,13 +125,13 @@ The agent runs at `0.0.0.0:11435` (all interfaces, LAN-accessible) and reads
 | | |
 |---|---|
 | `GET /healthz`           | Public liveness probe. |
-| `GET /stats`             | In-memory per-attempt token usage for the last ~31 UTC days, bucketed by day × requested alias × served provider/model. Columns follow smolllm-go's usage: `input_tokens` excludes `cache_read_tokens`, and `output_tokens` includes `reasoning_tokens`. Auth required. |
+| `GET /stats`             | In-memory per-attempt token usage for the last ~31 UTC days, bucketed by day × access key name × requested alias × served provider/model. Columns follow smolllm-go's usage: `input_tokens` excludes `cache_read_tokens`, and `output_tokens` includes `reasoning_tokens`. Auth required. |
 | `GET /v1/models`         | Lists configured aliases. Auth required. |
 | `POST /v1/chat/completions` | OpenAI Chat Completions. Auth required. Streaming via `stream: true`. |
 | `POST /v1/embeddings`    | OpenAI Embeddings. Auth required. |
 
-Auth: `Authorization: Bearer <access_key>` (the bare `<access_key>` form is also
-accepted for clients that omit `Bearer`).
+Auth: `Authorization: Bearer <key>`, any key of `access_key` / `access_keys` (the
+bare `<key>` form is also accepted for clients that omit `Bearer`).
 
 ### Examples
 

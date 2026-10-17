@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -29,11 +30,17 @@ type Config struct {
 	Aliases map[string]string `yaml:"aliases"`
 }
 
+// DefaultKeyName names server.access_key in Keys, the request log and /stats.
+const DefaultKeyName = "default"
+
 type ServerConfig struct {
 	Bind      string `yaml:"bind"`
 	AccessKey string `yaml:"access_key"`
-	EnvFile   string `yaml:"env_file"`
-	LogLevel  string `yaml:"log_level"`
+	// AccessKeys maps a client's name to its key. Beside AccessKey: the union
+	// of both authenticates.
+	AccessKeys map[string]string `yaml:"access_keys"`
+	EnvFile    string            `yaml:"env_file"`
+	LogLevel   string            `yaml:"log_level"`
 }
 
 // Load reads YAML from path, applies env overrides and defaults, and validates.
@@ -88,8 +95,8 @@ func (c *Config) Validate() error {
 	if _, _, err := net.SplitHostPort(c.Server.Bind); err != nil {
 		return fmt.Errorf("invalid server.bind %q: %w", c.Server.Bind, err)
 	}
-	if strings.TrimSpace(c.Server.AccessKey) == "" {
-		return errors.New("server.access_key must be set in config (or via " + EnvAccessKey + ")")
+	if err := c.validateKeys(); err != nil {
+		return err
 	}
 	switch strings.ToLower(c.Server.LogLevel) {
 	case "debug", "info", "warn", "warning", "error":
@@ -108,6 +115,40 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (c *Config) validateKeys() error {
+	if strings.TrimSpace(c.Server.AccessKey) == "" && len(c.Server.AccessKeys) == 0 {
+		return errors.New("server.access_key or server.access_keys must be set in config (or via " + EnvAccessKey + ")")
+	}
+	if _, ok := c.Server.AccessKeys[DefaultKeyName]; ok && c.Server.AccessKey != "" {
+		return fmt.Errorf("server.access_keys.%s clashes with server.access_key, which is logged as %q", DefaultKeyName, DefaultKeyName)
+	}
+	owner := map[string]string{}
+	for name, key := range c.Keys() {
+		if strings.TrimSpace(name) == "" || strings.ContainsAny(name, " \t=") {
+			return fmt.Errorf("server.access_keys name %q must be non-empty without space, tab, or '='", name)
+		}
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("server.access_keys.%s must not be empty", name)
+		}
+		if other, ok := owner[key]; ok {
+			return fmt.Errorf("server.access_keys: %s and %s share one key, so a request could not be told apart", min(name, other), max(name, other))
+		}
+		owner[key] = name
+	}
+	return nil
+}
+
+// Keys returns every accepted key by its name: server.access_keys plus
+// server.access_key as DefaultKeyName.
+func (c *Config) Keys() map[string]string {
+	keys := make(map[string]string, len(c.Server.AccessKeys)+1)
+	maps.Copy(keys, c.Server.AccessKeys)
+	if c.Server.AccessKey != "" {
+		keys[DefaultKeyName] = c.Server.AccessKey
+	}
+	return keys
 }
 
 // EnvFilePath returns the expanded env-file path.

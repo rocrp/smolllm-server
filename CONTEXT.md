@@ -1,7 +1,8 @@
 # Domain context
 
 - **Ledger** — Process-local, token-only aggregation of every LLM request attempt. Records successes, failures, reported or estimated token usage; resets on restart. Follows smolllm-go's `Usage`: input excludes cache reads, which are counted on their own, and output includes the reasoning tokens counted beside it.
-- **Stats bucket** — Ledger row keyed by UTC day × requested alias (or raw model string) × served provider/model.
+- **Access key name** — The name a client's key has under `server.access_keys` (`default` for `server.access_key`). The request log and the Ledger carry it; the key itself is never logged.
+- **Stats bucket** — Ledger row keyed by UTC day × access key name × requested alias (or raw model string) × served provider/model.
 - **Reload** — Redeploy of the service process: rebuild, restart, and accept only on a passing health probe. Required for binary or bind changes; resets the Ledger.
 - **Config hot-reload** — In-process adoption of config.yaml edits (aliases, keys, log level) with no restart; a Reload is never needed for these.
 - **Pass-through field** — A client request field the server forwards to the provider verbatim without modeling it (`tools`, `tool_choice`, `parallel_tool_calls`, `response_format`); provider errors about it surface unchanged. Any other field the server does not model is not forwarded. `tools` stays a pass-through even though smolllm-go v0.3 models it: the typed `Request.Tools` carries name, description and parameters only, so routing through it would drop every other key a caller sent.

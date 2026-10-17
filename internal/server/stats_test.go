@@ -61,6 +61,7 @@ func TestStats_AggregatesChatAndEmbeddingAttempts(t *testing.T) {
 	require.Equal(t, []ledger.Bucket{
 		{
 			Day:          day,
+			Key:          "default",
 			Alias:        "fast",
 			Provider:     "mock",
 			Model:        "marvin-7b",
@@ -70,6 +71,7 @@ func TestStats_AggregatesChatAndEmbeddingAttempts(t *testing.T) {
 		},
 		{
 			Day:          day,
+			Key:          "default",
 			Alias:        "mock/marvin-7b",
 			Provider:     "mock",
 			Model:        "marvin-7b",
