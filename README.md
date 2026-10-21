@@ -99,6 +99,12 @@ Two constraints:
 
 ## Install / run
 
+Public hostname: `https://smolllm.rocry.com` is the smoledge Cloudflare Worker
+(`~/w/smoledge/CONTEXT.md`) since 2026-10-20. It verifies the same access keys
+and forwards to this server through the Access-gated `origin-llm-studio.rocry.com` tunnel
+hostname; nothing reaches `:11435` from the internet directly.
+
+
 ```bash
 just install      # build, seed config, link plist, bootstrap agent
 just reload       # rebuild + kickstart (full restart; needed for bind changes)
