@@ -39,11 +39,16 @@ func New(store *config.Store, logger *slog.Logger) *Server {
 	// resolves credentials per leg at call time, so hot-reloading the env file
 	// still reaches it. Everything that varies per request - the model chain, the
 	// sampling knobs, the ledger hook - is a per-call option.
+	//
+	// WithTimeout(0): smolllm-go's own 600s whole-call default would kill a
+	// longer call although its client holds a bigger budget. The client's deadline
+	// and hang-up already bound a call, and a request's `timeout` field still
+	// overrides this per call.
 	h := &handlers{
 		store:  store,
 		logger: logger,
 		ledger: ledger.New(),
-		client: smolllm.New(smolllm.WithLogger(logger), smolllm.WithLegBudget(legBudget)),
+		client: smolllm.New(smolllm.WithLogger(logger), smolllm.WithLegBudget(legBudget), smolllm.WithTimeout(0)),
 	}
 
 	// Public routes (no auth)

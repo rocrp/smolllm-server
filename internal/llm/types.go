@@ -22,8 +22,8 @@ type ChatRequest struct {
 	Stop            json.RawMessage                          `json:"stop,omitempty"`
 	Seed            *int                                     `json:"seed,omitempty"`
 	N               *int                                     `json:"n,omitempty"`
-	// Timeout in seconds. 0 disables the timeout (relies on the request context).
-	// When omitted, smolllm-go's default applies.
+	// Timeout in seconds bounding the whole call. 0 or omitted: unbounded, the
+	// request context (client deadline or hang-up) is the only limit.
 	Timeout *float64 `json:"timeout,omitempty"`
 	// StreamOptions is read by the server itself, never forwarded.
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`

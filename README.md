@@ -255,8 +255,9 @@ error`.
 
 The optional `timeout` request field (seconds) now bounds the **whole call** —
 every fallback leg, every retry, the backoff waits between them, and the
-consumption of the stream — not one upstream request. Omit it for the library
-default of 600s; `0` disables the bound and leaves only the request context.
+consumption of the stream — not one upstream request. Omit it (or send `0`)
+and nothing bounds the call but the request context: the client's own deadline or
+hang-up. There is no server-side default, so a client budget above 600s is honoured.
 
 Usage follows the OpenAI shape: `prompt_tokens` counts the whole prompt, cached
 or not, with the cached share repeated under `prompt_tokens_details.cached_tokens`
