@@ -55,8 +55,9 @@ to Codex's prompt cache and session, so give one conversation one stable key.
 
 Each request logs one `msg=request` line with `key` (the name of the access key
 that authenticated it, never the key), `alias` (what the client asked
-for) and `model` (the leg that served it, or the last one tried). A stream that
-fails after its 200 went out logs the failure's status at WARN, not 200.
+for), `model` (the leg that served it, or the last one tried) and `request_id`
+(the caller's `X-Request-ID` header, when sent). A stream that fails after its
+200 went out logs the failure's status at WARN, not 200.
 
 ### Per-leg reasoning effort
 

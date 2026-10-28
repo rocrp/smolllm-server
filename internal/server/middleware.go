@@ -68,6 +68,11 @@ func logMW(logger *slog.Logger) func(http.Handler) http.Handler {
 				"duration_ms", time.Since(start).Milliseconds(),
 				"remote", r.RemoteAddr,
 			}
+			if id := r.Header.Get("X-Request-ID"); id != "" {
+				// The caller's own id for the call (Zelna: msg-<tenant>-<thread>-<seq>),
+				// so one search finds the call in both services' logs.
+				attrs = append(attrs, "request_id", id)
+			}
 			if note.key != "" {
 				attrs = append(attrs, "key", note.key)
 			}

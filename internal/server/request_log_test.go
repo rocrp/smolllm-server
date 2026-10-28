@@ -130,6 +130,24 @@ func TestRequestLog_NamesAliasAndServedModel(t *testing.T) {
 	require.Contains(t, line, "model=mock/beta")
 }
 
+// A caller's X-Request-ID lands on the request line, so its logs and ours join on it.
+func TestRequestLog_CarriesTheForwardedRequestID(t *testing.T) {
+	ts, logs, _ := newCacheRig(t, rateLimited)
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"fast","messages":[{"role":"user","content":"hi"}]}`))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer rocry")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "msg-1-7-3")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+
+	require.Contains(t, logs.requestLine(t), "request_id=msg-1-7-3")
+}
+
 // A stream that fails after its 200 went out is logged with the failure's
 // status, not the 200 the wire carried.
 func TestRequestLog_FailedStreamIsNotLoggedAs200(t *testing.T) {
