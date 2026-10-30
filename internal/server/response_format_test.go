@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,23 +17,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// smolayer's answer to any response_format on a WorkBuddy leg, captured from
-// smolayer 67f8bec on 2026-10-30. Qoder's wire.rs rejects it the same way.
-const smolayerFormatRefusal = `{"error":{"message":"workbuddy does not promise JSON schema output",` +
-	`"type":"invalid_request_error","param":"response_format","code":null}}`
+// 400 bodies captured from the live smolayer (67f8bec) on 2026-10-30.
+const (
+	// Any non-text response_format on a WorkBuddy leg.
+	smolayerFormatRefusal = `{"error":{"message":"workbuddy does not promise JSON schema output",` +
+		`"type":"invalid_request_error","param":"response_format","code":null}}`
+	// Any qoder leg while smolayer holds no qoder login.
+	smolayerQoderLoggedOut = "{\"error\":{\"message\":\"unknown provider `qoder`; known providers: codex, " +
+		"antigravity, workbuddy, workbuddy-global; `qoder` is not logged in (run `smolayer login qoder`)\"," +
+		`"type":"invalid_request_error","param":"model","code":null}}`
+)
 
-// A JSON caller on an alias that leads with a formatless smolayer leg is served
-// by the next leg instead of failing on that leg's 400.
-func TestChatCompletions_ResponseFormatSkipsFormatlessLegs(t *testing.T) {
+// smolayer's leg-local 400s, a logged-out qoder and a WorkBuddy that cannot
+// honour json_object, hand the call to the next leg instead of failing it.
+func TestChatCompletions_LegLocalRefusalsFailOver(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
 		name   string
 		format string
 		want   []string
 	}{
-		{"json_object", `,"response_format":{"type":"json_object"}`, []string{"codex/gpt-6-luna"}},
-		{"text", `,"response_format":{"type":"text"}`, []string{"workbuddy/hy3"}},
-		{"absent", ``, []string{"workbuddy/hy3"}},
+		{"json_object", `,"response_format":{"type":"json_object"}`,
+			[]string{"qoder/qwen3-coder", "workbuddy/hy3", "codex/gpt-6-luna"}},
+		{"text", `,"response_format":{"type":"text"}`, []string{"qoder/qwen3-coder", "workbuddy/hy3"}},
+		{"absent", ``, []string{"qoder/qwen3-coder", "workbuddy/hy3"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -50,11 +58,18 @@ func TestChatCompletions_ResponseFormatSkipsFormatlessLegs(t *testing.T) {
 				mu.Lock()
 				calls = append(calls, body.Model)
 				mu.Unlock()
-				formatless := strings.HasPrefix(body.Model, "workbuddy/") || strings.HasPrefix(body.Model, "qoder/")
-				if formatless && body.ResponseFormat != nil && body.ResponseFormat["type"] != "text" {
+				refusal := ""
+				switch {
+				case strings.HasPrefix(body.Model, "qoder/"):
+					refusal = smolayerQoderLoggedOut
+				case strings.HasPrefix(body.Model, "workbuddy/") &&
+					body.ResponseFormat != nil && body.ResponseFormat["type"] != "text":
+					refusal = smolayerFormatRefusal
+				}
+				if refusal != "" {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusBadRequest)
-					_, _ = io.WriteString(w, smolayerFormatRefusal)
+					_, _ = io.WriteString(w, refusal)
 					return
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -68,7 +83,7 @@ func TestChatCompletions_ResponseFormatSkipsFormatlessLegs(t *testing.T) {
 				store: config.NewStore("", &config.Config{
 					Server: config.ServerConfig{AccessKey: "rocry"},
 					Aliases: map[string]string{
-						"json": "smolayer/workbuddy/hy3!low,smolayer/qoder/qwen3-coder,smolayer/codex/gpt-6-luna!low",
+						"json": "smolayer/qoder/qwen3-coder,smolayer/workbuddy/hy3!low,smolayer/codex/gpt-6-luna!low",
 					},
 				}),
 				logger: logger,
@@ -88,7 +103,9 @@ func TestChatCompletions_ResponseFormatSkipsFormatlessLegs(t *testing.T) {
 			require.Equal(t, http.StatusOK, resp.StatusCode, string(answer))
 			mu.Lock()
 			defer mu.Unlock()
-			require.Equal(t, tt.want, calls)
+			// smolllm-go re-sends a 400ed leg once without stream_options, so
+			// each refusing leg is asked twice in a row; only the order matters.
+			require.Equal(t, tt.want, slices.Compact(calls))
 		})
 	}
 }

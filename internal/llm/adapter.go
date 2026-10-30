@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -45,20 +44,10 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.R
 	if aliasResolve != nil {
 		model = aliasResolve(model)
 	}
-	chain, err := modelspec.Parse(model)
+	routing, err := ModelOptions(model)
 	if err != nil {
 		return empty, nil, err
 	}
-	formatted, err := asksForFormat(req.ResponseFormat)
-	if err != nil {
-		return empty, nil, err
-	}
-	if formatted {
-		if chain, err = withoutFormatlessLegs(chain); err != nil {
-			return empty, nil, err
-		}
-	}
-	routing := chainOptions(chain)
 
 	turn := smolllm.RequestFromMessages(req.Messages)
 	if err := restoreToolCallExtras(turn.Messages, req.rawMessages); err != nil {
@@ -127,10 +116,6 @@ func ModelOptions(model string) ([]smolllm.Option, error) {
 	if err != nil {
 		return nil, err
 	}
-	return chainOptions(chain), nil
-}
-
-func chainOptions(chain modelspec.Chain) []smolllm.Option {
 	opts := make([]smolllm.Option, 0, len(chain.Legs)+1)
 	opts = append(opts, smolllm.WithModel(chain.Model()))
 	for _, leg := range chain.Legs {
@@ -138,46 +123,7 @@ func chainOptions(chain modelspec.Chain) []smolllm.Option {
 			opts = append(opts, smolllm.WithLegReasoningEffort(leg.Spec, leg.Effort))
 		}
 	}
-	return opts
-}
-
-// formatlessLegs are the leg prefixes whose provider refuses any
-// `response_format`: smolayer rejects it up front for WorkBuddy and Qoder with
-// a 400 (`param: response_format`), and smolllm-go aborts the whole chain on a
-// 400. Stripping the field would quietly break the caller's JSON contract, so
-// these legs are routed around instead.
-var formatlessLegs = []string{"smolayer/workbuddy/", "smolayer/workbuddy-global/", "smolayer/qoder/"}
-
-// asksForFormat reports whether response_format asks for anything beyond plain text.
-func asksForFormat(raw json.RawMessage) (bool, error) {
-	if isJSONNullOrEmpty(raw) {
-		return false, nil
-	}
-	var format struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &format); err != nil {
-		return false, fmt.Errorf("response_format must be an object with a type: %w", err)
-	}
-	return format.Type != "" && format.Type != "text", nil
-}
-
-// withoutFormatlessLegs drops the legs that would reject a response_format.
-func withoutFormatlessLegs(chain modelspec.Chain) (modelspec.Chain, error) {
-	kept := modelspec.Chain{Legs: make([]modelspec.Leg, 0, len(chain.Legs))}
-	for _, leg := range chain.Legs {
-		formatless := slices.ContainsFunc(formatlessLegs, func(prefix string) bool {
-			return strings.HasPrefix(leg.Spec, prefix)
-		})
-		if !formatless {
-			kept.Legs = append(kept.Legs, leg)
-		}
-	}
-	if len(kept.Legs) == 0 {
-		return chain, fmt.Errorf(
-			"no leg of %q honours response_format (smolayer refuses it for workbuddy and qoder)", chain.Model())
-	}
-	return kept, nil
+	return opts, nil
 }
 
 // restoreToolCallExtras puts back the tool-call keys the openai param union drops

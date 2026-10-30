@@ -183,10 +183,10 @@ curl -fsS http://127.0.0.1:11435/v1/embeddings \
 
 `tools`, `tool_choice`, `parallel_tool_calls` and `response_format` are
 pass-through fields: forwarded to the provider verbatim, never modeled here, so
-a provider error about one surfaces unchanged. One exception: a non-`text`
-`response_format` skips `smolayer/workbuddy/`, `smolayer/workbuddy-global/` and
-`smolayer/qoder/` legs, which smolayer refuses with a 400 that would abort the
-whole chain; an alias left with no leg is a 400. Assistant messages carrying
+a provider error about one surfaces unchanged. A leg whose provider refuses a
+`response_format` it cannot honour (smolayer's WorkBuddy and Qoder, a 400 naming
+`param: response_format`) does not end the call: smolllm-go v0.4.1 advances past
+it, and the refusal shows only if every leg refuses. Assistant messages carrying
 `tool_calls` and `tool` role messages replay as sent.
 
 Streaming forwards tool calls fragment by fragment, the way OpenAI does: one
@@ -230,7 +230,7 @@ classifies each failure, and that classification picks the status:
 | what happened | status |
 |---|---|
 | a leg rejected the request shape (400, 422) and aborted the chain | the upstream's own status, `invalid_request_error` |
-| every leg advanced and the chain ran out (401, 403, 404, 413, 429, connection, EOF) | 502 `api_error` |
+| every leg advanced and the chain ran out (401, 403, 404, 413, 429, a 400 naming a leg-local `param`/`code` such as `model` or `response_format`, connection, EOF) | 502 `api_error` |
 | the whole-call budget expired | 504 `api_error` |
 | the client hung up mid-call | 499 |
 | nothing was attempted (unusable request, empty chain) | 400 `invalid_request_error` |
