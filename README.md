@@ -183,7 +183,10 @@ curl -fsS http://127.0.0.1:11435/v1/embeddings \
 
 `tools`, `tool_choice`, `parallel_tool_calls` and `response_format` are
 pass-through fields: forwarded to the provider verbatim, never modeled here, so
-a provider error about one surfaces unchanged. Assistant messages carrying
+a provider error about one surfaces unchanged. One exception: a non-`text`
+`response_format` skips `smolayer/workbuddy/`, `smolayer/workbuddy-global/` and
+`smolayer/qoder/` legs, which smolayer refuses with a 400 that would abort the
+whole chain; an alias left with no leg is a 400. Assistant messages carrying
 `tool_calls` and `tool` role messages replay as sent.
 
 Streaming forwards tool calls fragment by fragment, the way OpenAI does: one
