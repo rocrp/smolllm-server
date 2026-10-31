@@ -18,8 +18,7 @@ readonly HEALTH_URL="http://127.0.0.1:11435/healthz"
 # ~/.env.smolllm links into ~/Documents (TCC-protected). A launchd process that
 # opens it blocks in open() on an unanswered Documents prompt: alive, unbound,
 # invisible to KeepAlive (2026-10-31, 1h outage). The service therefore reads a
-# private copy outside every TCC folder, refreshed by install/reload.
-readonly ENV_SOURCE="${HOME}/.env.smolllm"
+# private copy outside every TCC folder, written by ifiles' sync-secrets.sh.
 readonly ENV_COPY="${HOME}/Library/Application Support/smolllm-server/env"
 # A stable identity keeps the binary's own signature constant across rebuilds.
 readonly CODESIGN_IDENTITY="${SMOLLLM_SERVER_CODESIGN_IDENTITY:-Developer ID Application: Tian Xia (C9FPMJGKC4)}"
@@ -73,11 +72,11 @@ build_binary() {
     echo "✓ built ${BIN_PATH}"
 }
 
-# Rotated provider keys reach the service only through this copy: run `just reload`.
-sync_env() {
-    mkdir -p "$(dirname "${ENV_COPY}")"
-    install -m 600 "${ENV_SOURCE}" "${ENV_COPY}"
-    echo "✓ copied ${ENV_SOURCE} → ${ENV_COPY}"
+require_env() {
+    if [[ ! -f "${ENV_COPY}" ]]; then
+        echo "✗ ${ENV_COPY} missing: run ~/Documents/ifiles/scripts/sync-secrets.sh" >&2
+        return 1
+    fi
 }
 
 seed_config() {
@@ -171,7 +170,7 @@ verify_healthy() {
 
 cmd_install() {
     build_binary
-    sync_env
+    require_env
     seed_config
     link_plist
     if is_loaded; then
@@ -183,7 +182,7 @@ cmd_install() {
 
 cmd_reinstall() {
     build_binary
-    sync_env
+    require_env
     seed_config
     bootout
     rm -f "${TARGET}"
@@ -193,7 +192,7 @@ cmd_reinstall() {
 
 cmd_reload() {
     build_binary
-    sync_env
+    require_env
     if ! is_loaded; then
         echo "  ${LABEL} not loaded; bootstrapping"
         link_plist

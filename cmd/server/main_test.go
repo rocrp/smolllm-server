@@ -85,3 +85,34 @@ func TestNamedKeys_HotReloadRevokesWithinASecond(t *testing.T) {
 		time.Second, 20*time.Millisecond, "the removed key is refused within a second")
 	require.Equal(t, http.StatusOK, status("k-laptop"))
 }
+
+// A key rotation as the secrets sync performs it: the env file, kept in its
+// own directory, is replaced by an atomic rename and the new value is live
+// within a second without touching config.yaml.
+func TestEnvFileRotation_HotReloadsProviderKey(t *testing.T) {
+	const name = "ROTATION_TEST_API_KEY"
+	t.Setenv(name, "")
+	envPath := filepath.Join(t.TempDir(), "env")
+	require.NoError(t, os.WriteFile(envPath, []byte(name+"=old\n"), 0o600))
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(twoKeys+"  env_file: "+envPath+"\n"), 0o600))
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	require.NoError(t, cfg.ReloadEnvFile())
+	require.Equal(t, "old", os.Getenv(name))
+
+	logs := &syncBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	store := config.NewStore(path, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go watchConfig(ctx, store, server.New(store, logger), new(slog.LevelVar), logger)
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "config auto-reload enabled") },
+		time.Second, 10*time.Millisecond)
+
+	staged := envPath + ".tmp"
+	require.NoError(t, os.WriteFile(staged, []byte(name+"=new\n"), 0o600))
+	require.NoError(t, os.Rename(staged, envPath))
+	require.Eventually(t, func() bool { return os.Getenv(name) == "new" },
+		time.Second, 20*time.Millisecond, "the rotated key is live within a second:\n%s", logs.String())
+}

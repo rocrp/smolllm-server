@@ -89,29 +89,43 @@ func run() error {
 	return srv.Run(ctx)
 }
 
-// watchConfig auto-reloads when the config file changes on disk.
+// watchConfig auto-reloads when the config file or its env file changes on
+// disk, so a rotated provider key lands without a restart.
 //
-// We watch the parent directory because editors typically save atomically
+// We watch parent directories because editors and `install` save atomically
 // (write tmp → rename over original); a watch bound to the original inode
-// would go stale after such a save. Filtering by basename inside the
+// would go stale after such a save. Filtering by full path inside each
 // directory catches both atomic renames and in-place writes.
+//
+// The env file path is read once at startup: pointing env_file elsewhere
+// needs `just reload`.
 //
 // A 200 ms debounce coalesces editor bursts (chmod + write + rename) into
 // a single reload.
 func watchConfig(ctx context.Context, store *config.Store, srv *server.Server, levelVar *slog.LevelVar, logger *slog.Logger) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		logger.Warn("fsnotify init failed; auto-reload disabled", "error", err)
+		logger.Error("fsnotify init failed; auto-reload disabled", "error", err)
 		return
 	}
 	defer w.Close()
 
-	dir, base := filepath.Split(store.Path())
-	if err := w.Add(dir); err != nil {
-		logger.Warn("fsnotify add failed; auto-reload disabled", "dir", dir, "error", err)
+	watched := []string{filepath.Clean(store.Path())}
+	envPath, err := store.Get().EnvFilePath()
+	if err != nil {
+		logger.Error("resolve env file failed; auto-reload disabled", "error", err)
 		return
 	}
-	logger.Info("config auto-reload enabled", "watching", store.Path())
+	if envPath != "" {
+		watched = append(watched, filepath.Clean(envPath))
+	}
+	for _, path := range watched {
+		if err := w.Add(filepath.Dir(path)); err != nil {
+			logger.Error("fsnotify add failed; auto-reload disabled", "dir", filepath.Dir(path), "error", err)
+			return
+		}
+	}
+	logger.Info("config auto-reload enabled", "watching", watched)
 
 	var debounce *time.Timer
 	reload := func() { doReload(store, srv, levelVar, logger) }
@@ -124,7 +138,7 @@ func watchConfig(ctx context.Context, store *config.Store, srv *server.Server, l
 			if !ok {
 				return
 			}
-			if filepath.Base(ev.Name) != base {
+			if !slices.Contains(watched, filepath.Clean(ev.Name)) {
 				continue
 			}
 			if debounce != nil {
@@ -152,7 +166,7 @@ func doReload(store *config.Store, srv *server.Server, levelVar *slog.LevelVar, 
 		levelVar.Set(parseLevel(newCfg.Server.LogLevel))
 	}
 	if err := newCfg.ReloadEnvFile(); err != nil {
-		logger.Warn("env file reload failed", "error", err)
+		logger.Error("env file reload failed; provider keys unchanged", "error", err)
 	}
 
 	logger.Info("config reloaded",

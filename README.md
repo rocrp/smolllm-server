@@ -118,15 +118,18 @@ just logs         # tail ~/Library/Logs/personal.smolllm-server.log
 Just edit the YAML — the server picks it up automatically (~200 ms debounce
 via fsnotify). Hot-reloadable: `aliases`, `server.access_key`, `server.access_keys`
 (a removed key is refused on the next request),
-`server.log_level`, and `server.env_file` contents (re-sourced with overwrite
-so rotated provider keys take effect). Invalid YAML is rejected and the
+`server.log_level`, and the `server.env_file` contents (the file is watched
+too and re-sourced with overwrite, so a rotated provider key takes effect
+within a second). Invalid YAML is rejected and the
 previous snapshot is retained.
 
 For `server.bind` changes, or to force a clean restart, run `just reload`.
 
 The agent runs at `0.0.0.0:11435` (all interfaces, LAN-accessible) and reads
-`~/Library/Application Support/smolllm-server/env`, a 600 copy of `~/.env.smolllm`
-that `just install`/`just reload` refresh. Never point `env_file` into `~/Documents`
+`~/Library/Application Support/smolllm-server/env`, a 600 copy of
+`~/Documents/ifiles/env.smolllm` that ifiles' `scripts/sync-secrets.sh` writes
+(manually after an edit, and every 10 min via the cronmgr job `sync-secrets`).
+Edit only the ifiles file. Never point `env_file` into `~/Documents`
 (where `~/.env.smolllm` links): a launchd process opening a TCC folder hangs in
 `open()` on an unanswered prompt, alive and unbound. A missing env file fails startup.
 
