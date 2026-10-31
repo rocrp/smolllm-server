@@ -62,6 +62,7 @@ func New(store *config.Store, logger *slog.Logger) *Server {
 		func(r *http.Request, name string) { noteFor(r).key = name },
 	)
 	mux.Handle("POST /v1/chat/completions", authMW(http.HandlerFunc(h.chat)))
+	mux.Handle("POST /v1/images/generations", authMW(http.HandlerFunc(h.images)))
 	mux.Handle("POST /v1/embeddings", authMW(http.HandlerFunc(h.embeddings)))
 	mux.Handle("GET /v1/models", authMW(http.HandlerFunc(h.models)))
 	mux.Handle("GET /stats", authMW(http.HandlerFunc(h.stats)))

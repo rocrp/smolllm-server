@@ -16,18 +16,20 @@ func (h *handlers) models(w http.ResponseWriter, _ *http.Request) {
 		Object: "list",
 		Data:   make([]llm.ModelInfo, 0, len(cfg.Aliases)),
 	}
-	names := make([]string, 0, len(cfg.Aliases))
+	names := make([]string, 0, len(cfg.Aliases)+len(cfg.ImageAliases))
 	for name := range cfg.Aliases {
+		names = append(names, name)
+	}
+	for name := range cfg.ImageAliases {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		out.Data = append(out.Data, llm.ModelInfo{
-			ID:      name,
-			Object:  "model",
-			OwnedBy: "smolllm-alias",
-			Created: now,
-		})
+		info := llm.ModelInfo{ID: name, Object: "model", OwnedBy: "smolllm-alias", Created: now}
+		if _, isImage := cfg.ImageModel(name); isImage {
+			info.SupportedOperations = []string{"images.generations"}
+		}
+		out.Data = append(out.Data, info)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

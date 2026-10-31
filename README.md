@@ -11,7 +11,7 @@ internal/config/    YAML loader, env-file loader, alias resolution
 internal/auth/      bearer token middleware
 internal/llm/       OpenAI ↔ smolllm adapter (request build + response shapes + failure mapping)
 internal/modelspec/ fallback-chain grammar incl. the `!effort` suffix, shared by config and adapter
-internal/server/    HTTP wiring: chat / embeddings / models / health
+internal/server/    HTTP wiring: chat / embeddings / images / models / health
 internal/apierr/    OpenAI-style error envelope
 launch/             LaunchAgent plist + install/reload/uninstall script
 ```
@@ -34,10 +34,14 @@ server:
     rctlsr: another-secret
   env_file: ~/Library/Application Support/smolllm-server/env    # provider keys: ${PROVIDER}_API_KEY etc.
   log_level: info
+  image_timeout: 330s         # bounds one image request; default 330s (smolayer's own deadline is 300s)
 
 aliases:
   fast: cerebras/qwen-3-235b-a22b-instruct-2507,groq/qwen/qwen3-32b!none,gemini/gemini-flash-latest
   translator: ollama/frob/hy-mt1.5:latest,gemini/gemini-flash-lite-latest
+
+image_aliases:                # POST /v1/images/generations; one smolayer leg each
+  zelna-cover: smolayer/codex/gpt-image-2
 ```
 
 At least one key is required: `access_key`, `access_keys`, or both (the union
@@ -139,9 +143,10 @@ Edit only the ifiles file. Never point `env_file` into `~/Documents`
 |---|---|
 | `GET /healthz`           | Public liveness probe. |
 | `GET /stats`             | In-memory per-attempt token usage for the last ~31 UTC days, bucketed by day × access key name × requested alias × served provider/model. Columns follow smolllm-go's usage: `input_tokens` excludes `cache_read_tokens`, and `output_tokens` includes `reasoning_tokens`. Auth required. |
-| `GET /v1/models`         | Lists configured aliases. Auth required. |
+| `GET /v1/models`         | Lists configured aliases; image aliases carry `supported_operations: ["images.generations"]`. Auth required. |
 | `POST /v1/chat/completions` | OpenAI Chat Completions. Auth required. Streaming via `stream: true`. |
 | `POST /v1/embeddings`    | OpenAI Embeddings. Auth required. |
+| `POST /v1/images/generations` | Forwards one `image_aliases` entry to its smolayer leg. Auth required. |
 
 Auth: `Authorization: Bearer <key>`, any key of `access_key` / `access_keys` (the
 bare `<key>` form is also accepted for clients that omit `Bearer`).
@@ -184,6 +189,33 @@ curl -fsS http://127.0.0.1:11435/v1/embeddings \
 - **Cursor / Open WebUI / Aider**: set base URL to `http://127.0.0.1:11435/v1`,
   API key to your access key, and pick `fast`, `translator`, or any
   `provider/model` string.
+
+## Images
+
+`POST /v1/images/generations` asks for a picture by alias, as chat does. The alias
+must be under `image_aliases` and name exactly one `smolayer/<model>` leg (load
+refuses two legs, another provider, an `!effort` suffix, or a name also used under
+`aliases`). The body is forwarded as JSON to `SMOLAYER_BASE_URL`/v1/images/generations
+under `SMOLAYER_API_KEY`, with `model` replaced by the leg's model id; every other
+field passes through unvalidated, since smolayer owns them. `X-Request-ID` is
+forwarded too.
+
+- The reply is relayed untouched, whatever its status: smolayer's own 4xx/5xx body
+  (`image_timeout`, `image_capacity_exhausted`) reaches the client as sent. Only a
+  call with no reply is the server's own error: 504 `image_timeout` once
+  `server.image_timeout` (default 330s) runs out, 499 on a client hang-up, 502
+  otherwise, and 502 for a reply over smolayer's 64 MiB bound.
+- Never retried, never failed over, no leg budget, not in the Ledger (tokens only).
+- Request body capped at 1 MiB (413). Generations only: no edits, multipart or streaming.
+- A chat alias on this route, or an image alias on chat, is a 400 before any upstream call.
+- The `msg=request` line carries `key`, `alias`, `model` (the full leg spec), `request_id`
+  and `duration_ms`, as for chat.
+
+```bash
+curl -fsS http://127.0.0.1:11435/v1/images/generations \
+  -H "Authorization: Bearer $ACCESS_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"zelna-cover","prompt":"a quiet harbour","response_format":"b64_json"}'
+```
 
 ## Tool calling
 

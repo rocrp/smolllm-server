@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -23,11 +24,20 @@ const (
 	EnvConfigPath     = "SMOLLLM_SERVER_CONFIG"
 	DefaultConfigPath = "~/.config/smolllm-server/config.yaml"
 	DefaultEnvFile    = "~/Library/Application Support/smolllm-server/env"
+	// DefaultImageTimeout outlasts smolayer's own 300 s image deadline, so the
+	// server never cuts a generation smolayer would still finish.
+	DefaultImageTimeout = 330 * time.Second
+	// ImageProvider is the only provider an image alias may name.
+	ImageProvider = "smolayer"
 )
 
 type Config struct {
 	Server  ServerConfig      `yaml:"server"`
 	Aliases map[string]string `yaml:"aliases"`
+	// ImageAliases maps an alias to exactly one smolayer image model, served by
+	// POST /v1/images/generations. Chat aliases and image aliases are separate
+	// namespaces: each route refuses the other's names.
+	ImageAliases map[string]string `yaml:"image_aliases"`
 }
 
 // DefaultKeyName names server.access_key in Keys, the request log and /stats.
@@ -41,6 +51,8 @@ type ServerConfig struct {
 	AccessKeys map[string]string `yaml:"access_keys"`
 	EnvFile    string            `yaml:"env_file"`
 	LogLevel   string            `yaml:"log_level"`
+	// ImageTimeout bounds one image request, upstream wait included. Default 330s.
+	ImageTimeout time.Duration `yaml:"image_timeout"`
 }
 
 // Load reads YAML from path, applies env overrides and defaults, and validates.
@@ -80,6 +92,9 @@ func (c *Config) applyDefaults() {
 	if c.Server.EnvFile == "" {
 		c.Server.EnvFile = DefaultEnvFile
 	}
+	if c.Server.ImageTimeout == 0 {
+		c.Server.ImageTimeout = DefaultImageTimeout
+	}
 	if c.Aliases == nil {
 		c.Aliases = map[string]string{}
 	}
@@ -103,6 +118,12 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("invalid server.log_level %q (want debug|info|warn|error)", c.Server.LogLevel)
 	}
+	if c.Server.ImageTimeout < 0 {
+		return fmt.Errorf("invalid server.image_timeout %s (want a positive duration)", c.Server.ImageTimeout)
+	}
+	if err := c.validateImageAliases(); err != nil {
+		return err
+	}
 	for name, value := range c.Aliases {
 		if strings.TrimSpace(name) == "" {
 			return errors.New("alias name must not be empty")
@@ -112,6 +133,32 @@ func (c *Config) Validate() error {
 		}
 		if err := modelspec.Validate(value); err != nil {
 			return fmt.Errorf("alias %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateImageAliases() error {
+	for name, spec := range c.ImageAliases {
+		if strings.TrimSpace(name) == "" || strings.ContainsAny(name, " \t/,") {
+			return fmt.Errorf("image_aliases name %q must be non-empty without space, tab, slash, or comma", name)
+		}
+		if _, clash := c.Aliases[name]; clash {
+			return fmt.Errorf("image_aliases.%s is also a chat alias; each route needs its own name", name)
+		}
+		chain, err := modelspec.Parse(spec)
+		if err != nil {
+			return fmt.Errorf("image_aliases.%s: %w", name, err)
+		}
+		if len(chain.Legs) != 1 {
+			return fmt.Errorf("image_aliases.%s: %q must name exactly one leg (an image request is never retried or failed over)", name, spec)
+		}
+		leg := chain.Legs[0]
+		if leg.Effort != "" {
+			return fmt.Errorf("image_aliases.%s: an image model takes no %q effort", name, modelspec.EffortSeparator+leg.Effort)
+		}
+		if id, ok := strings.CutPrefix(leg.Spec, ImageProvider+"/"); !ok || id == "" {
+			return fmt.Errorf("image_aliases.%s: %q must be %s/<model>; only %s serves images", name, spec, ImageProvider, ImageProvider)
 		}
 	}
 	return nil
@@ -201,6 +248,13 @@ func (c *Config) ResolveModel(name string) string {
 		return v
 	}
 	return name
+}
+
+// ImageModel returns the leg of an image alias. ok is false for any other
+// name, chat aliases included.
+func (c *Config) ImageModel(name string) (model string, ok bool) {
+	model, ok = c.ImageAliases[name]
+	return model, ok
 }
 
 // ResolvePath picks the config file path: explicit > env > default.

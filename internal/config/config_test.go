@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -254,6 +255,65 @@ func TestLoad_RejectsBadNamedKeys(t *testing.T) {
 			t.Parallel()
 			_, err := load(t, tc.yaml)
 			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+func TestLoad_ImageAlias(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(writeConfig(t, `
+server:
+  access_key: k
+aliases:
+  fast: foo/bar
+image_aliases:
+  cover: smolayer/codex/gpt-image-2
+`))
+	require.NoError(t, err)
+	model, ok := cfg.ImageModel("cover")
+	require.True(t, ok)
+	require.Equal(t, "smolayer/codex/gpt-image-2", model)
+	_, ok = cfg.ImageModel("fast")
+	require.False(t, ok)
+	require.Equal(t, 330*time.Second, cfg.Server.ImageTimeout)
+}
+
+func TestLoad_ImageTimeoutIsConfigurable(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(writeConfig(t, "server:\n  access_key: k\n  image_timeout: 5m\n"))
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Minute, cfg.Server.ImageTimeout)
+
+	_, err = Load(writeConfig(t, "server:\n  access_key: k\n  image_timeout: -1s\n"))
+	require.ErrorContains(t, err, "server.image_timeout")
+}
+
+func TestLoad_ImageAliasRefusals(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct{ name, spec, alias, want string }{
+		{"two legs", "smolayer/codex/gpt-image-2,smolayer/codex/gpt-image-3", "", "exactly one leg"},
+		{"non-smolayer leg", "openai/gpt-image-1", "", "smolayer"},
+		{"bare model", "gpt-image-2", "", "smolayer"},
+		{"effort suffix", "smolayer/codex/gpt-image-2!low", "", "effort"},
+		{"empty model", "smolayer/", "", "smolayer"},
+		{"name used by a chat alias", "smolayer/codex/gpt-image-2", "cover: foo/bar", "cover"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			aliases := "aliases:\n  x: foo/bar\n"
+			if tt.alias != "" {
+				aliases = "aliases:\n  " + tt.alias + "\n"
+			}
+			_, err := Load(writeConfig(t, "server:\n  access_key: k\n"+aliases+"image_aliases:\n  cover: "+tt.spec+"\n"))
+			require.ErrorContains(t, err, tt.want)
+			require.ErrorContains(t, err, "image_aliases")
 		})
 	}
 }

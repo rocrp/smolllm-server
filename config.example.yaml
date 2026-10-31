@@ -14,6 +14,9 @@ server:
   # Loaded at startup; existing env vars are NOT overwritten.
   env_file: ~/Library/Application Support/smolllm-server/env
   log_level: info  # debug | info | warn | error
+  # Bounds one POST /v1/images/generations, upstream wait included. Default 330s:
+  # it must outlast smolayer's own 300s image deadline.
+  image_timeout: 330s
 
 # Aliases map a logical name to a comma-separated provider/model fallback chain.
 # smolllm-go tries each entry in order and falls back on errors.
@@ -44,3 +47,11 @@ aliases:
   # Tool calling: every leg here must honour `tools`. A leg that ignores them
   # answers in prose, which no agent loop can detect.
   agent: deepseek/deepseek-v4-flash,groq/openai/gpt-oss-120b!low,gemini/gemini-3.5-flash-lite
+
+# Image aliases serve POST /v1/images/generations. Exactly one smolayer leg each:
+# an image request is never retried and never falls back, so a failed generation
+# spends its quota once. The names are separate from `aliases` (a clash is refused
+# at load) and each route refuses the other's names with a 400. smolayer is
+# reached through SMOLAYER_BASE_URL / SMOLAYER_API_KEY, as for chat legs.
+image_aliases:
+  zelna-cover: smolayer/codex/gpt-image-2

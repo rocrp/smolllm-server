@@ -23,6 +23,10 @@ func (h *handlers) chat(w http.ResponseWriter, r *http.Request) {
 	note := noteFor(r)
 	note.alias = req.Model
 
+	if _, isImage := h.cfg().ImageModel(req.Model); isImage {
+		badRequest(w, fmt.Sprintf("%q is an image alias; use POST /v1/images/generations", req.Model))
+		return
+	}
 	turn, opts, err := llm.BuildOptions(&req, h.cfg().ResolveModel)
 	if err != nil {
 		badRequest(w, err.Error())

@@ -284,4 +284,6 @@ type ModelInfo struct {
 	Object  string `json:"object"`
 	OwnedBy string `json:"owned_by"`
 	Created int64  `json:"created"`
+	// SupportedOperations is set on image aliases only (["images.generations"]).
+	SupportedOperations []string `json:"supported_operations,omitempty"`
 }
