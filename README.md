@@ -32,7 +32,7 @@ server:
   access_key: change-me       # SMOLLLM_SERVER_ACCESS_KEY env wins if set; logged as key=default
   access_keys:                # one per client, revocable alone; logged by name
     rctlsr: another-secret
-  env_file: ~/.env.smolllm    # provider keys: ${PROVIDER}_API_KEY etc.
+  env_file: ~/Library/Application Support/smolllm-server/env    # provider keys: ${PROVIDER}_API_KEY etc.
   log_level: info
 
 aliases:
@@ -125,7 +125,10 @@ previous snapshot is retained.
 For `server.bind` changes, or to force a clean restart, run `just reload`.
 
 The agent runs at `0.0.0.0:11435` (all interfaces, LAN-accessible) and reads
-`~/.env.smolllm` itself on startup — no wrapper script.
+`~/Library/Application Support/smolllm-server/env`, a 600 copy of `~/.env.smolllm`
+that `just install`/`just reload` refresh. Never point `env_file` into `~/Documents`
+(where `~/.env.smolllm` links): a launchd process opening a TCC folder hangs in
+`open()` on an unanswered prompt, alive and unbound. A missing env file fails startup.
 
 ## Endpoints
 

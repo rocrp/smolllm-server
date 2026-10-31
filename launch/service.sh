@@ -15,10 +15,13 @@ readonly CONFIG_PATH="${CONFIG_DIR}/config.yaml"
 readonly TARGET="${HOME}/Library/LaunchAgents/${PLIST}"
 # Matches server.bind in config.yaml; the port is hardcoded across the smolllm repos.
 readonly HEALTH_URL="http://127.0.0.1:11435/healthz"
-# The server reads its env file from ~/Documents (TCC-protected). TCC pins a
-# grant to the binary's designated requirement; an ad-hoc build's is its cdhash,
-# so every rebuild re-prompted and the service hung in open() until someone
-# clicked Allow. A stable identity + identifier keeps one grant across rebuilds.
+# ~/.env.smolllm links into ~/Documents (TCC-protected). A launchd process that
+# opens it blocks in open() on an unanswered Documents prompt: alive, unbound,
+# invisible to KeepAlive (2026-10-31, 1h outage). The service therefore reads a
+# private copy outside every TCC folder, refreshed by install/reload.
+readonly ENV_SOURCE="${HOME}/.env.smolllm"
+readonly ENV_COPY="${HOME}/Library/Application Support/smolllm-server/env"
+# A stable identity keeps the binary's own signature constant across rebuilds.
 readonly CODESIGN_IDENTITY="${SMOLLLM_SERVER_CODESIGN_IDENTITY:-Developer ID Application: Tian Xia (C9FPMJGKC4)}"
 readonly CODESIGN_ID="${LABEL}"
 
@@ -68,6 +71,13 @@ build_binary() {
     fi
     mv -f "${tmp}" "${BIN_PATH}"
     echo "✓ built ${BIN_PATH}"
+}
+
+# Rotated provider keys reach the service only through this copy: run `just reload`.
+sync_env() {
+    mkdir -p "$(dirname "${ENV_COPY}")"
+    install -m 600 "${ENV_SOURCE}" "${ENV_COPY}"
+    echo "✓ copied ${ENV_SOURCE} → ${ENV_COPY}"
 }
 
 seed_config() {
@@ -161,6 +171,7 @@ verify_healthy() {
 
 cmd_install() {
     build_binary
+    sync_env
     seed_config
     link_plist
     if is_loaded; then
@@ -172,6 +183,7 @@ cmd_install() {
 
 cmd_reinstall() {
     build_binary
+    sync_env
     seed_config
     bootout
     rm -f "${TARGET}"
@@ -181,6 +193,7 @@ cmd_reinstall() {
 
 cmd_reload() {
     build_binary
+    sync_env
     if ! is_loaded; then
         echo "  ${LABEL} not loaded; bootstrapping"
         link_plist

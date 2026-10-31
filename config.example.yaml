@@ -12,7 +12,7 @@ server:
   access_keys:
     rctlsr: change-me-too
   # Loaded at startup; existing env vars are NOT overwritten.
-  env_file: ~/.env.smolllm
+  env_file: ~/Library/Application Support/smolllm-server/env
   log_level: info  # debug | info | warn | error
 
 # Aliases map a logical name to a comma-separated provider/model fallback chain.

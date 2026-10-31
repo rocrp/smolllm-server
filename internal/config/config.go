@@ -22,7 +22,7 @@ const (
 	EnvAccessKey      = "SMOLLLM_SERVER_ACCESS_KEY"
 	EnvConfigPath     = "SMOLLLM_SERVER_CONFIG"
 	DefaultConfigPath = "~/.config/smolllm-server/config.yaml"
-	DefaultEnvFile    = "~/.env.smolllm"
+	DefaultEnvFile    = "~/Library/Application Support/smolllm-server/env"
 )
 
 type Config struct {
@@ -161,7 +161,7 @@ func (c *Config) EnvFilePath() (string, error) {
 
 // LoadEnvFile loads environment variables from the configured env file.
 // Existing env vars are NOT overwritten — launchd or shell exports win.
-// A missing file is not an error (returns nil).
+// A missing file is an error: starting without provider keys fails every request later.
 func (c *Config) LoadEnvFile() error {
 	return c.loadEnvFile(false)
 }
@@ -181,9 +181,7 @@ func (c *Config) loadEnvFile(overload bool) error {
 	if path == "" {
 		return nil
 	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("stat env file %s: %w", path, err)
 	}
 	loader := godotenv.Load
