@@ -110,6 +110,9 @@ type ChatMessage struct {
 	Content          *string            `json:"content"`
 	ReasoningContent string             `json:"reasoning_content,omitempty"`
 	ToolCalls        []smolllm.ToolCall `json:"tool_calls,omitempty"`
+	// ReasoningItems are smolayer's opaque Reasoning Item tokens, verbatim; the
+	// client echoes them back on this assistant message's replay.
+	ReasoningItems []string `json:"reasoning_items,omitempty"`
 }
 
 // CompletionUsage is the OpenAI usage block. smolllm-go reports Input with the
@@ -184,6 +187,8 @@ type ChatDelta struct {
 	// ToolCalls stream as they arrive: one frame opens the slot with its id and
 	// function name, later frames carry argument text only.
 	ToolCalls []ToolCallDelta `json:"tool_calls,omitempty"`
+	// ReasoningItems ride on the finish frame only (see chatStream).
+	ReasoningItems []string `json:"reasoning_items,omitempty"`
 }
 
 // ToolCallDelta is one streamed fragment of a tool call, in the shape OpenAI

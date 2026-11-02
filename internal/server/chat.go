@@ -74,6 +74,7 @@ func (h *handlers) chatBlocking(
 				Content:          content,
 				ReasoningContent: msg.Reasoning,
 				ToolCalls:        msg.ToolCalls,
+				ReasoningItems:   msg.ReasoningItems,
 			},
 			FinishReason: finishReasonForTurn(msg.FinishReason, len(msg.ToolCalls)),
 		}},
@@ -147,7 +148,10 @@ func (h *handlers) chatStream(
 		case smolllm.EventDone:
 			note.model = servedModel(event.Message)
 			reason := finishReasonForTurn(event.Message.FinishReason, len(event.Message.ToolCalls))
-			frames.write(llm.ChatDelta{}, &reason)
+			// smolllm-go fires no event per Reasoning Item and keeps only the
+			// answering leg's, so they ride here: a client merging deltas by
+			// pushing ends with exactly the tokens it must echo back.
+			frames.write(llm.ChatDelta{ReasoningItems: event.Message.ReasoningItems}, &reason)
 			if includeUsage {
 				frames.usage(llm.UsageFrom(event.Message.Usage))
 			}

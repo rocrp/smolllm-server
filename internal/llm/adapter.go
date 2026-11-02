@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	openai "github.com/openai/openai-go/v3"
 	"github.com/rocry/smolllm-go/smolllm"
 	"github.com/rocry/smolllm-server/internal/modelspec"
 )
@@ -50,7 +51,7 @@ func BuildOptions(req *ChatRequest, aliasResolve func(string) string) (smolllm.R
 	}
 
 	turn := smolllm.RequestFromMessages(req.Messages)
-	if err := restoreToolCallExtras(turn.Messages, req.rawMessages); err != nil {
+	if err := restoreAssistantExtras(turn.Messages, req.rawMessages); err != nil {
 		return empty, nil, err
 	}
 	if err := turn.Validate(); err != nil {
@@ -126,45 +127,56 @@ func ModelOptions(model string) ([]smolllm.Option, error) {
 	return opts, nil
 }
 
-// restoreToolCallExtras puts back the tool-call keys the openai param union drops
-// while decoding. A caller replaying an assistant turn must reach the provider
-// with it intact — Gemini expects its thought signature echoed back.
-func restoreToolCallExtras(messages []smolllm.Message, raw []json.RawMessage) error {
+// restoreAssistantExtras puts back the assistant-message keys the openai param
+// union drops while decoding. A caller replaying an assistant turn must reach
+// the provider with it intact: Gemini expects its tool-call thought signature
+// echoed back, and smolayer its `reasoning_items`.
+func restoreAssistantExtras(messages []smolllm.Message, raw []json.RawMessage) error {
 	if len(raw) != len(messages) {
 		return nil // nothing to align against; leave the decoded messages alone
 	}
 	for i, rawMessage := range raw {
 		assistant := messages[i].OfAssistant
-		if assistant == nil || len(assistant.ToolCalls) == 0 {
+		if assistant == nil {
 			continue
 		}
 		var envelope struct {
-			ToolCalls []map[string]json.RawMessage `json:"tool_calls"`
+			ToolCalls      []map[string]json.RawMessage `json:"tool_calls"`
+			ReasoningItems json.RawMessage              `json:"reasoning_items"`
 		}
 		if err := json.Unmarshal(rawMessage, &envelope); err != nil {
-			return fmt.Errorf("decode message #%d tool calls: %w", i, err)
+			return fmt.Errorf("decode assistant message #%d: %w", i, err)
 		}
-		if len(envelope.ToolCalls) != len(assistant.ToolCalls) {
-			continue
+		if !isJSONNullOrEmpty(envelope.ReasoningItems) {
+			assistant.SetExtraFields(map[string]any{"reasoning_items": envelope.ReasoningItems})
 		}
-		for j, rawCall := range envelope.ToolCalls {
-			extra := map[string]any{}
-			for key, value := range rawCall {
-				switch key {
-				case "id", "type", "function", "index":
-				default:
-					extra[key] = value
-				}
-			}
-			if len(extra) == 0 {
-				continue
-			}
-			if fn := assistant.ToolCalls[j].OfFunction; fn != nil {
-				fn.SetExtraFields(extra)
-			}
-		}
+		restoreToolCallExtras(assistant.ToolCalls, envelope.ToolCalls)
 	}
 	return nil
+}
+
+// restoreToolCallExtras copies every key of each raw call the param union does
+// not model onto the decoded call at the same position.
+func restoreToolCallExtras(calls []openai.ChatCompletionMessageToolCallUnionParam, raw []map[string]json.RawMessage) {
+	if len(raw) != len(calls) {
+		return
+	}
+	for j, rawCall := range raw {
+		extra := map[string]any{}
+		for key, value := range rawCall {
+			switch key {
+			case "id", "type", "function", "index":
+			default:
+				extra[key] = value
+			}
+		}
+		if len(extra) == 0 {
+			continue
+		}
+		if fn := calls[j].OfFunction; fn != nil {
+			fn.SetExtraFields(extra)
+		}
+	}
 }
 
 // promptCacheProviders accept `prompt_cache_key` and `user`. Other providers in

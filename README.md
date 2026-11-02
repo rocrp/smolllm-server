@@ -227,6 +227,15 @@ a provider error about one surfaces unchanged. A leg whose provider refuses a
 it, and the refusal shows only if every leg refuses. Assistant messages carrying
 `tool_calls` and `tool` role messages replay as sent.
 
+smolayer's Codex legs return Reasoning Items: opaque `rsn_…` tokens under
+`reasoning_items`, on the reply message (non-streaming) or on the finish frame's
+delta (streaming; only the answering leg's, so a leg that failed mid-reasoning
+never leaks its tokens). Echo them back verbatim as `reasoning_items` on the
+replayed assistant message and the model does not re-reason that step. They are
+forwarded to every leg of the chain, so a fallback leg whose provider rejects
+unknown message keys may refuse the replayed turn; keep chains that replay them
+on smolayer legs.
+
 Streaming forwards tool calls fragment by fragment, the way OpenAI does: one
 frame opens the slot with its `index`, `id`, `type` and function name, and later
 frames carry argument text only. smolllm-go v0.3 streams those fragments rather
