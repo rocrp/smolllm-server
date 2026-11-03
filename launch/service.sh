@@ -18,7 +18,7 @@ readonly HEALTH_URL="http://127.0.0.1:11435/healthz"
 # ~/.env.smolllm links into ~/Documents (TCC-protected). A launchd process that
 # opens it blocks in open() on an unanswered Documents prompt: alive, unbound,
 # invisible to KeepAlive (2026-10-31, 1h outage). The service therefore reads a
-# private copy outside every TCC folder, written by ifiles' sync-secrets.sh.
+# private copy outside every TCC folder, written by ifiles' sync-ifiles.sh.
 readonly ENV_COPY="${HOME}/Library/Application Support/smolllm-server/env"
 # A stable identity keeps the binary's own signature constant across rebuilds.
 readonly CODESIGN_IDENTITY="${SMOLLLM_SERVER_CODESIGN_IDENTITY:-Developer ID Application: Tian Xia (C9FPMJGKC4)}"
@@ -74,7 +74,7 @@ build_binary() {
 
 require_env() {
     if [[ ! -f "${ENV_COPY}" ]]; then
-        echo "✗ ${ENV_COPY} missing: run ~/Documents/ifiles/scripts/sync-secrets.sh" >&2
+        echo "✗ ${ENV_COPY} missing: run ~/Documents/ifiles/scripts/sync-ifiles.sh" >&2
         return 1
     fi
 }

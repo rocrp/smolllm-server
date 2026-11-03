@@ -131,8 +131,8 @@ For `server.bind` changes, or to force a clean restart, run `just reload`.
 
 The agent runs at `0.0.0.0:11435` (all interfaces, LAN-accessible) and reads
 `~/Library/Application Support/smolllm-server/env`, a 600 copy of
-`~/Documents/ifiles/env.smolllm` that ifiles' `scripts/sync-secrets.sh` writes
-(manually after an edit, and every 10 min via the cronmgr job `sync-secrets`).
+`~/Documents/ifiles/env.smolllm` that ifiles' `scripts/sync-ifiles.sh` writes
+(manually, after an edit; interactive zsh warns when the copy is stale).
 Edit only the ifiles file. Never point `env_file` into `~/Documents`
 (where `~/.env.smolllm` links): a launchd process opening a TCC folder hangs in
 `open()` on an unanswered prompt, alive and unbound. A missing env file fails startup.
